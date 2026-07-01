@@ -109,10 +109,10 @@ ANALYSIS_SCHEMA = {
     "type": "object",
     "properties": {
         "overview": {"type": "array", "items": {"type": "string"}},
-        "us_note": {"type": "string"},
-        "europe_note": {"type": "string"},
-        "asia_note": {"type": "string"},
-        "emerging_note": {"type": "string"},
+        "us_notes": {"type": "array", "items": {"type": "string"}},
+        "europe_notes": {"type": "array", "items": {"type": "string"}},
+        "asia_notes": {"type": "array", "items": {"type": "string"}},
+        "emerging_notes": {"type": "array", "items": {"type": "string"}},
         "sectors": {"type": "array", "items": {
             "type": "object",
             "properties": {
@@ -145,8 +145,8 @@ ANALYSIS_SCHEMA = {
         }},
         "headlines_th": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["overview", "us_note", "europe_note", "asia_note",
-                 "emerging_note", "sectors", "stocks", "events", "headlines_th"],
+    "required": ["overview", "us_notes", "europe_notes", "asia_notes",
+                 "emerging_notes", "sectors", "stocks", "events", "headlines_th"],
     "additionalProperties": False,
 }
 
@@ -197,7 +197,10 @@ def fetch_analysis(quotes: dict, headlines: list[str]) -> dict | None:
         "\n\nพาดหัวข่าวล่าสุด (อังกฤษ):\n" + "\n".join(f"- {h}" for h in headlines) +
         "\n\nช่วยเขียนสรุปตามโครงสร้าง JSON:\n"
         "- overview: 2 บูลเล็ตภาพรวมตลาดวันนี้\n"
-        "- us_note / europe_note / asia_note / emerging_note: หมายเหตุสั้นๆ ต่อภูมิภาค (1 บรรทัด)\n"
+        "- us_notes / europe_notes / asia_notes / emerging_notes: บูลเล็ตอธิบาย "
+        "'สาเหตุ/ข่าว' ที่ทำให้ดัชนีในภูมิภาคนั้นขึ้นหรือลง (2-4 บูลเล็ตต่อภูมิภาค — "
+        "สหรัฐฯ ให้ละเอียดสุด เช่น หุ้น/กลุ่มที่นำตลาด, เหตุการณ์สำคัญ, ปัจจัยกดดัน) "
+        "อิงจากตัวเลขจริง + พาดหัวข่าว ห้ามกุเหตุการณ์เฉพาะที่ไม่มีในข่าว\n"
         "- sectors: 2-3 เซกเตอร์จับตา แต่ละอันมี name, badge (ป้ายสั้นๆ เช่น 'ผันผวนสูง'), "
         "tone ('hi'=ลบ/เสี่ยง, 're'=บวก/ฟื้น, 'ne'=กลาง), text (บทวิเคราะห์สั้น)\n"
         "- stocks: ข่าว/ความเคลื่อนไหวหุ้นรายตัวสั้นๆ (1 บรรทัด) ให้ครบทุกตัวในลิสต์ "
@@ -247,8 +250,26 @@ def _row_html(idx: Idx, quotes: dict) -> str:
             f'<div class="pct {cls}">{arrow} {q.change_pct:+.2f}%</div></div>')
 
 
-def _bullet(text: str) -> str:
-    return f'<div class="bullet">{_e(text)}</div>' if text else ""
+def _bullets(items: list) -> str:
+    return "".join(f'<div class="bullet">{_e(x)}</div>' for x in (items or []) if x)
+
+
+def _us_cards(items: list, quotes: dict) -> str:
+    """Big highlight cards for the headline US indices."""
+    cards = ""
+    for idx in items:
+        q = quotes.get(idx.symbol)
+        if q is None:
+            val, pct, cls = "—", "ไม่มีข้อมูล", "flat"
+        else:
+            cls = "up" if q.change_pct > 0 else "down" if q.change_pct < 0 else "flat"
+            arrow = "▲" if q.change_pct > 0 else "▼" if q.change_pct < 0 else "▪"
+            val = fmt_num(q.close)
+            pct = f"{q.change_pct:+.2f}% {arrow}"
+        cards += (f'<div class="uscard"><div class="un">{_e(idx.name)}</div>'
+                  f'<div class="uv">{val}</div>'
+                  f'<div class="up2 {cls}">{pct}</div></div>')
+    return f'<div class="usgrid">{cards}</div>'
 
 
 def build_html(quotes: dict, analysis: dict | None) -> str:
@@ -257,17 +278,20 @@ def build_html(quotes: dict, analysis: dict | None) -> str:
     day_str = f"เช้าวัน{THAI_DAYS[now.weekday()]}"
     a = analysis or {}
 
-    # left column: index tables
-    notes = {"us": a.get("us_note"), "eu": a.get("europe_note"),
-             "asia": a.get("asia_note"), "em": a.get("emerging_note")}
+    # left column: index tables, each followed by "why it moved" bullets
+    notes = {"us": a.get("us_notes"), "eu": a.get("europe_notes"),
+             "asia": a.get("asia_notes"), "em": a.get("emerging_notes")}
     left = []
     for title, color, items in REGIONS:
-        rows = "".join(_row_html(i, quotes) for i in items)
-        block = (f'<div class="card"><div class="sec-head">'
-                 f'<span class="sec-dot" style="background:{color}"></span>'
-                 f'<span class="sec-title">{title}</span></div>'
-                 f'<div class="rows">{rows}</div>')
-        block += _bullet(notes.get(items[0].region) or "") + "</div>"
+        region_key = items[0].region
+        head = (f'<div class="sec-head">'
+                f'<span class="sec-dot" style="background:{color}"></span>'
+                f'<span class="sec-title">{title}</span></div>')
+        if region_key == "us":
+            body = _us_cards(items, quotes)
+        else:
+            body = '<div class="rows">' + "".join(_row_html(i, quotes) for i in items) + "</div>"
+        block = f'<div class="card">{head}{body}{_bullets(notes.get(region_key))}</div>'
         left.append(block)
 
     # overview
@@ -432,6 +456,11 @@ _TEMPLATE = """<!DOCTYPE html>
   .sec-head {{ display:flex; align-items:center; gap:11px; margin-bottom:13px; }}
   .sec-dot {{ width:11px; height:11px; border-radius:50%; }}
   .sec-title {{ font-size:23px; font-weight:700; color:#eef1f8; }}
+  .usgrid {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; }}
+  .uscard {{ background:#101a34; border:1px solid #26406e; border-radius:14px; padding:16px 18px; }}
+  .uscard .un {{ font-size:16px; font-weight:600; color:#9aa4ba; }}
+  .uscard .uv {{ font-size:30px; font-weight:700; color:#f2f5fb; margin:7px 0 5px; }}
+  .uscard .up2 {{ font-size:17px; font-weight:700; }}
   .rows {{ display:flex; flex-direction:column; }}
   .row {{ display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:18px; padding:12px 4px; border-bottom:1px solid #161f36; }}
   .row:last-child {{ border-bottom:none; }}
