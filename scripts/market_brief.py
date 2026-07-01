@@ -153,11 +153,38 @@ ANALYSIS_SCHEMA = {
 ANALYSIS_SYSTEM = (
     "คุณเป็นนักวิเคราะห์ตลาดทุนที่เขียนสรุปตลาดหุ้นโลกประจำวันเป็นภาษาไทย "
     "กระชับ เป็นทางการ เหมาะกับนักลงทุนมืออาชีพ "
-    "ใช้ข้อมูลตัวเลขและพาดหัวข่าวที่ให้มาเป็นหลัก "
-    "ห้ามกุตัวเลข/สถิติเฉพาะเจาะจงที่ไม่ได้อยู่ในข้อมูลที่ให้มา "
-    "ถ้าจะพูดถึงบริบทที่ไม่มีตัวเลขให้ใช้เชิงคุณภาพ "
+    "ต้องอ้างอิงจาก 'ข่าวจริงที่ค้นมา' และ 'ตัวเลขจริง' ที่ให้ไว้เท่านั้น "
+    "ห้ามกุข่าว/ตัวเลข/เหตุการณ์/ชื่อหุ้น ที่ไม่ปรากฏในข้อมูลที่ให้มาเด็ดขาด "
+    "ถ้าไม่มีข่าวยืนยันสาเหตุ ให้เขียนเชิงคุณภาพตามทิศทางราคาจริง (เช่น 'ปรับขึ้นตามแรงซื้อกลุ่มเทค') "
     "ข้อความทุกส่วนสั้น กระชับ (สูงสุด ~2 บรรทัด)"
 )
+
+
+def _web_search_news(client, date_str: str) -> str:
+    """Use Claude's web_search tool to gather real, current market-moving news."""
+    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}]
+    query = (
+        f"วันนี้คือ {date_str} ช่วยค้นข่าวตลาดหุ้นล่าสุดของวันนี้/เมื่อคืนที่ขับเคลื่อนตลาดหุ้น "
+        "สหรัฐฯ · ยุโรป · เอเชีย รวมถึงหุ้นเทคใหญ่ (Nvidia, TSMC, Apple, Microsoft, Tesla, Meta), "
+        "ทองคำ, น้ำมัน, Bitcoin และตัวเลข/เหตุการณ์เศรษฐกิจสำคัญ. "
+        "สรุปเป็นข้อเท็จจริงสั้นๆ เป็นข้อๆ พร้อมตัวเลข/เหตุการณ์จริงเท่าที่ค้นพบ ห้ามเดา "
+        "ระบุด้วยว่าอะไรทำให้แต่ละตลาด/หุ้นขึ้นหรือลง."
+    )
+    messages = [{"role": "user", "content": query}]
+    try:
+        resp = None
+        for _ in range(4):  # follow the server-side search loop across pause_turn
+            resp = client.messages.create(
+                model="claude-opus-4-8", max_tokens=3000, tools=tools, messages=messages,
+            )
+            if resp.stop_reason == "pause_turn":
+                messages = [messages[0], {"role": "assistant", "content": resp.content}]
+                continue
+            break
+        return "".join(b.text for b in resp.content if b.type == "text").strip()
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: web search failed: {exc}", file=sys.stderr)
+        return ""
 
 
 def fetch_analysis(quotes: dict, headlines: list[str]) -> dict | None:
@@ -191,11 +218,26 @@ def fetch_analysis(quotes: dict, headlines: list[str]) -> dict | None:
         q = quotes.get(idx.symbol)
         if q is not None:
             stock_lines.append(f"{idx.cc} ({idx.name}): {q.change_pct:+.2f}%")
+    try:
+        client = anthropic.Anthropic()
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: cannot init Anthropic client: {exc}", file=sys.stderr)
+        return None
+
+    # Step 1: fetch real, current news from the web.
+    date_str = datetime.now(ICT).strftime("%-d %B %Y")
+    news_context = _web_search_news(client, date_str)
+    if news_context:
+        news_section = "\n\nข่าวจริงที่ค้นจากเว็บวันนี้ (ใช้เป็นหลักในการเขียน):\n" + news_context
+    else:
+        news_section = "\n\nพาดหัวข่าวล่าสุด (อังกฤษ):\n" + "\n".join(f"- {h}" for h in headlines)
+
     prompt = (
+        f"วันนี้: {date_str}\n"
         "ข้อมูลดัชนีวันนี้:\n" + "\n".join(data_lines) +
         "\n\nหุ้นรายตัว (% วันนี้):\n" + "\n".join(stock_lines) +
-        "\n\nพาดหัวข่าวล่าสุด (อังกฤษ):\n" + "\n".join(f"- {h}" for h in headlines) +
-        "\n\nช่วยเขียนสรุปตามโครงสร้าง JSON:\n"
+        news_section +
+        "\n\nช่วยเขียนสรุปตามโครงสร้าง JSON โดยอ้างอิงจากข่าวจริง/ตัวเลขจริงข้างต้นเท่านั้น:\n"
         "- overview: 2 บูลเล็ตภาพรวมตลาดวันนี้\n"
         "- us_notes / europe_notes / asia_notes / emerging_notes: บูลเล็ตอธิบาย "
         "'สาเหตุ/ข่าว' ที่ทำให้ดัชนีในภูมิภาคนั้นขึ้นหรือลง (2-4 บูลเล็ตต่อภูมิภาค — "
@@ -208,13 +250,13 @@ def fetch_analysis(quotes: dict, headlines: list[str]) -> dict | None:
         "อิงจาก % จริง + บริบทกลุ่ม/ข่าว ห้ามกุเหตุการณ์เฉพาะเจาะจงที่ไม่มีในข่าว\n"
         "- events: 3-4 เหตุการณ์จับตาวันนี้/สัปดาห์นี้ แต่ละอันมี when (เช่น 'พฤ. 2 ก.ค.'), "
         "star (true เฉพาะอันสำคัญสุด), text\n"
-        "- headlines_th: แปล/สรุปพาดหัวข่าวเด่น 3 อันเป็นไทยสั้นๆ"
+        "- headlines_th: แปล/สรุปข่าวเด่นจริง 3 อันเป็นไทยสั้นๆ"
     )
+    # Step 2: structure the analysis as JSON (no tools, so the schema is honored).
     try:
-        client = anthropic.Anthropic()
         resp = client.messages.create(
             model="claude-opus-4-8",
-            max_tokens=2000,
+            max_tokens=2500,
             system=ANALYSIS_SYSTEM,
             output_config={"effort": "low",
                            "format": {"type": "json_schema", "schema": ANALYSIS_SCHEMA}},
