@@ -1,4 +1,4 @@
-name: Daily market news email
+name: Daily market brief email
 
 on:
   schedule:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Fetch and print only, do not send the email"
+        description: "Build the image only, do not send the email"
         type: boolean
         default: false
 
@@ -25,14 +25,25 @@ jobs:
       - name: Install dependencies
         run: pip install -r scripts/requirements.txt
 
-      - name: Build and send daily brief
+      - name: Install Chromium for rendering
+        run: python -m playwright install --with-deps chromium
+
+      - name: Build and send MARKET BRIEF
         env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            python scripts/market_news_daily.py --dry-run
+            python scripts/market_brief.py --dry-run
           else
-            python scripts/market_news_daily.py
+            python scripts/market_brief.py
           fi
+
+      - name: Upload brief image (for dry-run inspection)
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-brief
+          path: scripts/market_brief.png
