@@ -1,0 +1,38 @@
+name: Daily market news email
+
+on:
+  schedule:
+    # 00:30 UTC = 07:30 Asia/Bangkok (ICT), Monday–Friday.
+    # Monday's run covers Friday's US close.
+    - cron: "30 0 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Fetch and print only, do not send the email"
+        type: boolean
+        default: false
+
+jobs:
+  send-brief:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Build and send daily brief
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python scripts/market_news_daily.py --dry-run
+          else
+            python scripts/market_news_daily.py
+          fi
