@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
-"""Daily global stock-market brief, formatted for LINE.
+"""Daily global stock-market brief, delivered by email (or LINE).
 
 Fetches the latest close and daily % change for the major index of each
 target market from the free Yahoo Finance chart API (no API key required),
 adds top market headlines from free RSS feeds (CNBC, MarketWatch), builds a
-Thai-language summary, and pushes it to LINE via the Messaging API.
+Thai-language summary, and delivers it — by email via Gmail SMTP by default,
+or to LINE via the Messaging API when LINE credentials are supplied instead.
 
 Environment variables
 ---------------------
-LINE_CHANNEL_ACCESS_TOKEN : long-lived channel access token of the LINE
-                            Official Account that sends the message.
-LINE_TO                   : destination id (group id, room id, or user id)
-                            the push message is sent to.
+Email delivery (default):
+    GMAIL_USER         : the Gmail address that sends the mail
+    GMAIL_APP_PASSWORD : a Google "app password" (16 chars) for that account
+    MAIL_TO            : recipient address (defaults to GMAIL_USER)
+
+LINE delivery (used only if GMAIL_USER is not set):
+    LINE_CHANNEL_ACCESS_TOKEN : long-lived channel access token
+    LINE_TO                   : destination id (group / room / user)
 
 Usage
 -----
-    python scripts/market_news_daily.py            # fetch + send to LINE
+    python scripts/market_news_daily.py            # fetch + deliver
     python scripts/market_news_daily.py --dry-run  # fetch + print only
 """
 
@@ -23,10 +28,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import smtplib
+import ssl
 import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
+from email.mime.text import MIMEText
+from email.header import Header
 
 import requests
 
@@ -209,6 +218,30 @@ def build_message(quotes: dict[str, Quote | None], headlines: list[str] | None =
     return "\n".join(lines)
 
 
+def send_email(message: str) -> None:
+    """Send the brief as a plain-text email via Gmail SMTP."""
+    user = os.environ.get("GMAIL_USER")
+    password = os.environ.get("GMAIL_APP_PASSWORD")
+    to = os.environ.get("MAIL_TO") or user
+    if not user or not password:
+        raise SystemExit(
+            "ERROR: GMAIL_USER and GMAIL_APP_PASSWORD must both be set. "
+            "Use --dry-run to preview without sending."
+        )
+
+    today = datetime.now(ICT).strftime("%-d/%-m/%Y")
+    mime = MIMEText(message, "plain", "utf-8")
+    mime["Subject"] = Header(f"📊 สรุปตลาดหุ้นโลก — {today}", "utf-8")
+    mime["From"] = user
+    mime["To"] = to
+
+    context = ssl.create_default_context()
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context, timeout=30) as server:
+        server.login(user, password)
+        server.sendmail(user, [to], mime.as_string())
+    print(f"Sent email to {to} successfully.")
+
+
 def send_to_line(message: str) -> None:
     """Push the message to the configured LINE destination."""
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
@@ -233,11 +266,11 @@ def send_to_line(message: str) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Daily global market brief for LINE")
+    parser = argparse.ArgumentParser(description="Daily global market brief")
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="fetch and print the message without sending it to LINE",
+        help="fetch and print the message without delivering it",
     )
     args = parser.parse_args()
 
@@ -258,7 +291,11 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    send_to_line(message)
+    # Deliver by email when Gmail credentials are present; otherwise LINE.
+    if os.environ.get("GMAIL_USER"):
+        send_email(message)
+    else:
+        send_to_line(message)
     return 0
 
 
