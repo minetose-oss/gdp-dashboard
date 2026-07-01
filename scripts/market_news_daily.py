@@ -3,7 +3,8 @@
 
 Fetches the latest close and daily % change for the major index of each
 target market from the free Yahoo Finance chart API (no API key required),
-builds a Thai-language summary, and pushes it to LINE via the Messaging API.
+adds top market headlines from free RSS feeds (CNBC, MarketWatch), builds a
+Thai-language summary, and pushes it to LINE via the Messaging API.
 
 Environment variables
 ---------------------
@@ -23,6 +24,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 
@@ -39,6 +41,17 @@ LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 
 # A browser-like UA keeps Yahoo from rejecting the request.
 HTTP_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; market-brief/1.0)"}
+
+# Free RSS feeds for market headlines. Tried in order; any feed that fails or
+# returns nothing is skipped, so a stale/wrong URL never breaks the brief.
+NEWS_FEEDS: list[str] = [
+    "https://www.cnbc.com/id/20910258/device/rss/rss.html",   # CNBC Markets
+    "https://www.cnbc.com/id/100003114/device/rss/rss.html",  # CNBC Top News
+    "https://feeds.content.dowjones.io/public/rss/mw_topstories",  # MarketWatch
+]
+
+# How many headlines to include in the brief.
+HEADLINE_LIMIT = 6
 
 
 @dataclass
@@ -105,13 +118,65 @@ def fetch_quote(symbol: str) -> Quote | None:
         return None
 
 
+def _parse_feed_titles(xml_text: str) -> list[str]:
+    """Extract item/entry titles from an RSS or Atom feed body."""
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+    titles: list[str] = []
+    # RSS 2.0: <item><title>; Atom: <entry><title> (namespaced).
+    for item in root.iter():
+        tag = item.tag.rsplit("}", 1)[-1]  # strip any namespace
+        if tag not in ("item", "entry"):
+            continue
+        for child in item:
+            if child.tag.rsplit("}", 1)[-1] == "title" and child.text:
+                titles.append(child.text.strip())
+                break
+    return titles
+
+
+def fetch_headlines(feeds: list[str] = NEWS_FEEDS, limit: int = HEADLINE_LIMIT) -> list[str]:
+    """Collect up to `limit` unique headlines across the configured feeds.
+
+    Feeds are fetched in order and their headlines interleaved, so the brief
+    stays diverse even when one source dominates. Any failing feed is skipped.
+    """
+    per_feed: list[list[str]] = []
+    for url in feeds:
+        try:
+            resp = requests.get(url, headers=HTTP_HEADERS, timeout=15)
+            resp.raise_for_status()
+            per_feed.append(_parse_feed_titles(resp.text))
+        except requests.RequestException:
+            continue
+
+    headlines: list[str] = []
+    seen: set[str] = set()
+    # Round-robin across feeds for source diversity.
+    for i in range(max((len(f) for f in per_feed), default=0)):
+        for feed_titles in per_feed:
+            if i >= len(feed_titles):
+                continue
+            title = feed_titles[i]
+            key = title.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            headlines.append(title)
+            if len(headlines) >= limit:
+                return headlines
+    return headlines
+
+
 def format_number(value: float) -> str:
     """Thousands-separated, two decimals, no trailing noise."""
     return f"{value:,.2f}"
 
 
-def build_message(quotes: dict[str, Quote | None]) -> str:
-    """Assemble the LINE-friendly Thai brief from fetched quotes."""
+def build_message(quotes: dict[str, Quote | None], headlines: list[str] | None = None) -> str:
+    """Assemble the LINE-friendly Thai brief from fetched quotes and headlines."""
     today = datetime.now(ICT).strftime("%-d/%-m/%Y")
     lines: list[str] = [f"📊 สรุปตลาดหุ้นโลก — เช้าวันที่ {today}", ""]
 
@@ -131,10 +196,15 @@ def build_message(quotes: dict[str, Quote | None]) -> str:
             f"{arrow} {sign}{quote.change_pct:.2f}%"
         )
 
+    if headlines:
+        lines.append("")
+        lines.append("📰 ข่าวเด่น (แหล่งฟรี)")
+        lines += [f"  • {h}" for h in headlines]
+
     lines += [
         "",
         "หมายเหตุ: ตัวเลขคือราคาปิดล่าสุดของแต่ละตลาด (ต่างโซนเวลาปิดคนละช่วง)",
-        "ที่มา: Yahoo Finance",
+        "ที่มา: Yahoo Finance, CNBC, MarketWatch",
     ]
     return "\n".join(lines)
 
@@ -178,7 +248,11 @@ def main() -> int:
         print(f"WARNING: no data for {len(missing)} symbol(s): {', '.join(missing)}",
               file=sys.stderr)
 
-    message = build_message(quotes)
+    headlines = fetch_headlines()
+    if not headlines:
+        print("WARNING: no headlines fetched from any feed", file=sys.stderr)
+
+    message = build_message(quotes, headlines)
     print(message)
 
     if args.dry_run:
