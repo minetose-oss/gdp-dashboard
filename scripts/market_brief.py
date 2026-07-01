@@ -95,15 +95,15 @@ EXTRAS = [
     Idx("x", "$", "EUR/USD", "EURUSD=X"),
 ]
 
-# Single-stock watchlist (global movers + Thai blue chips). `cc` is the ticker
-# key that Claude uses to attach a one-line news note.
+# Single-stock watchlist (global movers). `cc` is the ticker key that Claude
+# uses to attach a one-line news note.
 STOCKS = [
     Idx("stk", "NVDA", "Nvidia", "NVDA"),
     Idx("stk", "TSM", "TSMC", "TSM"),
+    Idx("stk", "AAPL", "Apple", "AAPL"),
+    Idx("stk", "MSFT", "Microsoft", "MSFT"),
     Idx("stk", "TSLA", "Tesla", "TSLA"),
-    Idx("stk", "DELTA", "Delta (ไทย)", "DELTA.BK"),
-    Idx("stk", "CPALL", "CPALL (ไทย)", "CPALL.BK"),
-    Idx("stk", "ADVANC", "ADVANC (ไทย)", "ADVANC.BK"),
+    Idx("stk", "META", "Meta", "META"),
 ]
 
 ANALYSIS_SCHEMA = {
@@ -204,7 +204,7 @@ def fetch_analysis(quotes: dict, headlines: list[str]) -> dict | None:
         "- sectors: 2-3 เซกเตอร์จับตา แต่ละอันมี name, badge (ป้ายสั้นๆ เช่น 'ผันผวนสูง'), "
         "tone ('hi'=ลบ/เสี่ยง, 're'=บวก/ฟื้น, 'ne'=กลาง), text (บทวิเคราะห์สั้น)\n"
         "- stocks: ข่าว/ความเคลื่อนไหวหุ้นรายตัวสั้นๆ (1 บรรทัด) ให้ครบทุกตัวในลิสต์ "
-        "โดย ticker ต้องตรงกับที่ให้มา (NVDA, TSM, TSLA, DELTA, CPALL, ADVANC) "
+        "โดย ticker ต้องตรงกับที่ให้มา (NVDA, TSM, AAPL, MSFT, TSLA, META) "
         "อิงจาก % จริง + บริบทกลุ่ม/ข่าว ห้ามกุเหตุการณ์เฉพาะเจาะจงที่ไม่มีในข่าว\n"
         "- events: 3-4 เหตุการณ์จับตาวันนี้/สัปดาห์นี้ แต่ละอันมี when (เช่น 'พฤ. 2 ก.ค.'), "
         "star (true เฉพาะอันสำคัญสุด), text\n"
