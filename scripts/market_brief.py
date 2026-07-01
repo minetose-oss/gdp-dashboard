@@ -78,7 +78,6 @@ REGIONS = [
         Idx("asia", "TW", "TAIEX", "^TWII"),
         Idx("asia", "IN", "Sensex", "^BSESN"),
         Idx("asia", "IN", "Nifty 50", "^NSEI"),
-        Idx("asia", "TH", "SET Index", "^SET.BK"),
     ]),
     ("ตลาดเกิดใหม่", "#ea580c", [
         Idx("em", "BR", "Ibovespa", "^BVSP"),
@@ -144,12 +143,10 @@ ANALYSIS_SCHEMA = {
             "required": ["ticker", "note"],
             "additionalProperties": False,
         }},
-        "thai_focus": {"type": "string"},
         "headlines_th": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["overview", "us_note", "europe_note", "asia_note",
-                 "emerging_note", "sectors", "stocks", "events",
-                 "thai_focus", "headlines_th"],
+                 "emerging_note", "sectors", "stocks", "events", "headlines_th"],
     "additionalProperties": False,
 }
 
@@ -208,7 +205,6 @@ def fetch_analysis(quotes: dict, headlines: list[str]) -> dict | None:
         "อิงจาก % จริง + บริบทกลุ่ม/ข่าว ห้ามกุเหตุการณ์เฉพาะเจาะจงที่ไม่มีในข่าว\n"
         "- events: 3-4 เหตุการณ์จับตาวันนี้/สัปดาห์นี้ แต่ละอันมี when (เช่น 'พฤ. 2 ก.ค.'), "
         "star (true เฉพาะอันสำคัญสุด), text\n"
-        "- thai_focus: โฟกัสหุ้นไทย/SET 1-2 บรรทัด\n"
         "- headlines_th: แปล/สรุปพาดหัวข่าวเด่น 3 อันเป็นไทยสั้นๆ"
     )
     try:
@@ -271,10 +267,6 @@ def build_html(quotes: dict, analysis: dict | None) -> str:
                  f'<span class="sec-dot" style="background:{color}"></span>'
                  f'<span class="sec-title">{title}</span></div>'
                  f'<div class="rows">{rows}</div>')
-        if items[0].region == "asia" and a.get("thai_focus"):
-            block += ('<div class="thai"><div class="th-h">'
-                      '<span class="tag">TH</span>หุ้นไทยเพิ่มเติม</div>'
-                      f'<div class="th-b">{_e(a["thai_focus"])}</div></div>')
         block += _bullet(notes.get(items[0].region) or "") + "</div>"
         left.append(block)
 
@@ -490,7 +482,7 @@ _TEMPLATE = """<!DOCTYPE html>
     <div class="col">{right}</div>
   </div>
   <div class="foot">
-    <div class="src">แหล่งอ้างอิง: Yahoo Finance · CNBC · MarketWatch · Reuters · SET (set.or.th)
+    <div class="src">แหล่งอ้างอิง: Yahoo Finance · CNBC · MarketWatch · Reuters
       <div class="disc">หมายเหตุ: ตัวเลขเป็นราคาปิดล่าสุด/ระหว่างวันของแต่ละตลาด (ต่างโซนเวลา) · จัดทำเพื่อให้ข้อมูลเท่านั้น มิใช่คำแนะนำการลงทุน</div>
     </div>
     <div class="logo">MARKET BRIEF</div>
