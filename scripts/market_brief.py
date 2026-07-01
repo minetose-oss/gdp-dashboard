@@ -95,6 +95,17 @@ EXTRAS = [
     Idx("x", "$", "EUR/USD", "EURUSD=X"),
 ]
 
+# Single-stock watchlist (global movers + Thai blue chips). `cc` is the ticker
+# key that Claude uses to attach a one-line news note.
+STOCKS = [
+    Idx("stk", "NVDA", "Nvidia", "NVDA"),
+    Idx("stk", "TSM", "TSMC", "TSM"),
+    Idx("stk", "TSLA", "Tesla", "TSLA"),
+    Idx("stk", "DELTA", "Delta (ไทย)", "DELTA.BK"),
+    Idx("stk", "CPALL", "CPALL (ไทย)", "CPALL.BK"),
+    Idx("stk", "ADVANC", "ADVANC (ไทย)", "ADVANC.BK"),
+]
+
 ANALYSIS_SCHEMA = {
     "type": "object",
     "properties": {
@@ -124,11 +135,21 @@ ANALYSIS_SCHEMA = {
             "required": ["when", "star", "text"],
             "additionalProperties": False,
         }},
+        "stocks": {"type": "array", "items": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string"},
+                "note": {"type": "string"},
+            },
+            "required": ["ticker", "note"],
+            "additionalProperties": False,
+        }},
         "thai_focus": {"type": "string"},
         "headlines_th": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["overview", "us_note", "europe_note", "asia_note",
-                 "emerging_note", "sectors", "events", "thai_focus", "headlines_th"],
+                 "emerging_note", "sectors", "stocks", "events",
+                 "thai_focus", "headlines_th"],
     "additionalProperties": False,
 }
 
@@ -168,14 +189,23 @@ def fetch_analysis(quotes: dict, headlines: list[str]) -> dict | None:
         q = quotes.get(idx.symbol)
         if q is not None:
             data_lines.append(f"{idx.name}: {fmt_num(q.close)} ({q.change_pct:+.2f}%)")
+    stock_lines = []
+    for idx in STOCKS:
+        q = quotes.get(idx.symbol)
+        if q is not None:
+            stock_lines.append(f"{idx.cc} ({idx.name}): {q.change_pct:+.2f}%")
     prompt = (
         "ข้อมูลดัชนีวันนี้:\n" + "\n".join(data_lines) +
+        "\n\nหุ้นรายตัว (% วันนี้):\n" + "\n".join(stock_lines) +
         "\n\nพาดหัวข่าวล่าสุด (อังกฤษ):\n" + "\n".join(f"- {h}" for h in headlines) +
         "\n\nช่วยเขียนสรุปตามโครงสร้าง JSON:\n"
         "- overview: 2 บูลเล็ตภาพรวมตลาดวันนี้\n"
         "- us_note / europe_note / asia_note / emerging_note: หมายเหตุสั้นๆ ต่อภูมิภาค (1 บรรทัด)\n"
         "- sectors: 2-3 เซกเตอร์จับตา แต่ละอันมี name, badge (ป้ายสั้นๆ เช่น 'ผันผวนสูง'), "
         "tone ('hi'=ลบ/เสี่ยง, 're'=บวก/ฟื้น, 'ne'=กลาง), text (บทวิเคราะห์สั้น)\n"
+        "- stocks: ข่าว/ความเคลื่อนไหวหุ้นรายตัวสั้นๆ (1 บรรทัด) ให้ครบทุกตัวในลิสต์ "
+        "โดย ticker ต้องตรงกับที่ให้มา (NVDA, TSM, TSLA, DELTA, CPALL, ADVANC) "
+        "อิงจาก % จริง + บริบทกลุ่ม/ข่าว ห้ามกุเหตุการณ์เฉพาะเจาะจงที่ไม่มีในข่าว\n"
         "- events: 3-4 เหตุการณ์จับตาวันนี้/สัปดาห์นี้ แต่ละอันมี when (เช่น 'พฤ. 2 ก.ค.'), "
         "star (true เฉพาะอันสำคัญสุด), text\n"
         "- thai_focus: โฟกัสหุ้นไทย/SET 1-2 บรรทัด\n"
@@ -290,7 +320,27 @@ def build_html(quotes: dict, analysis: dict | None) -> str:
                     f'<span class="sec-title">ค่าเงิน · โภคภัณฑ์ · คริปโต</span></div>'
                     f'<div class="rows">{extras_rows}</div></div>')
 
-    right = sec_block + ev_block + extras_block + hl_block
+    # single-stock news card
+    stock_notes = {s.get("ticker", ""): s.get("note", "") for s in (a.get("stocks") or [])}
+    stk_items = ""
+    for idx in STOCKS:
+        q = quotes.get(idx.symbol)
+        if q is None:
+            continue
+        cls = "up" if q.change_pct > 0 else "down" if q.change_pct < 0 else "flat"
+        arrow = "▲" if q.change_pct > 0 else "▼" if q.change_pct < 0 else "▪"
+        note = stock_notes.get(idx.cc, "")
+        note_html = f'<div class="stk-note">{_e(note)}</div>' if note else ""
+        stk_items += (f'<div class="stk"><div class="stk-top">'
+                      f'<span class="stk-nm">{_e(idx.name)} <span class="cc">{idx.cc}</span></span>'
+                      f'<span class="pct {cls}">{arrow} {q.change_pct:+.2f}%</span></div>'
+                      f'{note_html}</div>')
+    stk_block = (f'<div class="card"><div class="sec-head">'
+                 f'<span class="sec-dot" style="background:#a78bfa"></span>'
+                 f'<span class="sec-title">หุ้นเด่นรายตัว</span></div>{stk_items}</div>'
+                 ) if stk_items else ""
+
+    right = sec_block + stk_block + ev_block + extras_block + hl_block
 
     return _TEMPLATE.format(
         date=date_str, day=day_str, overview=overview_html,
@@ -350,6 +400,7 @@ def main() -> int:
 
     symbols = [idx.symbol for _, _, items in REGIONS for idx in items]
     symbols += [idx.symbol for idx in EXTRAS]
+    symbols += [idx.symbol for idx in STOCKS]
     quotes = {s: fetch_quote(s) for s in symbols}
     missing = [s for s, q in quotes.items() if q is None]
     if missing:
@@ -418,6 +469,11 @@ _TEMPLATE = """<!DOCTYPE html>
   .tl .when {{ font-size:16px; font-weight:700; color:#7fb0ff; min-width:104px; }}
   .tl .what {{ font-size:16.5px; color:#a3adc4; line-height:1.5; }}
   .star {{ color:#fbbf24; }}
+  .stk {{ padding:11px 2px; border-bottom:1px solid #161f36; }}
+  .stk:last-child {{ border-bottom:none; }}
+  .stk-top {{ display:flex; justify-content:space-between; align-items:center; }}
+  .stk-nm {{ font-size:19px; font-weight:600; color:#dbe1ee; }}
+  .stk-note {{ font-size:15.5px; color:#8b95ac; line-height:1.45; margin-top:5px; }}
   .foot {{ margin-top:26px; padding-top:16px; border-top:1px solid #1e2942; display:flex; justify-content:space-between; align-items:flex-start; }}
   .foot .src {{ font-size:15px; color:#7c86a0; line-height:1.5; max-width:1150px; }}
   .foot .logo {{ font-size:22px; font-weight:700; letter-spacing:2px; color:#2e3c5e; }}
