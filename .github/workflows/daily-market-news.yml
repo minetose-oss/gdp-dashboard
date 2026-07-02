@@ -1,10 +1,15 @@
 name: Daily market brief email
 
 on:
+  # Precise trigger: an external cron service (e.g. cron-job.org) POSTs a
+  # repository_dispatch at the exact desired time. GitHub's own schedule below
+  # is a best-effort fallback (GitHub cron can be delayed or skipped).
+  repository_dispatch:
+    types: [daily-brief]
   schedule:
-    # 00:30 UTC = 07:30 Asia/Bangkok (ICT), Monday–Friday.
-    # Monday's run covers Friday's US close.
-    - cron: "30 0 * * 1-5"
+    # 23:30 UTC = 06:30 Asia/Bangkok (ICT), Monday–Friday — earlier, as a
+    # fallback so even with GitHub's delay it tends to land before the morning.
+    - cron: "30 23 * * 0-4"
   workflow_dispatch:
     inputs:
       dry_run:
