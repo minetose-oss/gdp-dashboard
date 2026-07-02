@@ -58,7 +58,33 @@
 ## ปรับเวลา/วันที่ส่ง
 
 แก้ `cron` ในไฟล์ `.github/workflows/daily-market-news.yml`
-เวลาเป็น **UTC** (เวลาไทย = UTC+7) เช่น `30 0 * * 1-5` = 07:30 น. ไทย จันทร์–ศุกร์
+เวลาเป็น **UTC** (เวลาไทย = UTC+7) — ปัจจุบันตั้ง `30 23 * * 0-4` = 06:30 น. ไทย จันทร์–ศุกร์
+(เป็น fallback; cron ของ GitHub อาจดีเลย์/ข้ามรอบได้)
+
+## ส่งให้ตรงเวลาด้วย cron ภายนอก (แนะนำ)
+
+GitHub cron ไม่การันตีตรงเวลา จึงเปิดช่องให้บริการภายนอกยิง `repository_dispatch` มา trigger
+ตรงเวลาเป๊ะ (workflow มี trigger `repository_dispatch: types: [daily-brief]` อยู่แล้ว)
+
+**1) สร้าง GitHub token (fine-grained)**
+- [github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens) → Generate new token (fine-grained)
+- Repository access: เลือก `minetose-oss/gdp-dashboard`
+- Permissions → Repository → **Contents: Read and write**
+- คัดลอก token (ขึ้นต้น `github_pat_...`)
+
+**2) ตั้ง cron ที่ [cron-job.org](https://cron-job.org) (ฟรี)**
+- URL: `https://api.github.com/repos/minetose-oss/gdp-dashboard/dispatches`
+- Method: **POST**
+- Schedule: จันทร์–ศุกร์ เวลาที่ต้องการ (ตั้ง timezone = Asia/Bangkok)
+- Headers:
+  - `Accept: application/vnd.github+json`
+  - `Authorization: Bearer <token จากข้อ 1>`
+  - `Content-Type: application/json`
+  - `X-GitHub-Api-Version: 2022-11-28`
+- Body: `{"event_type":"daily-brief"}`
+
+> ⚠️ ถ้าใช้ทั้ง cron ภายนอก **และ** GitHub schedule พร้อมกัน อาจได้อีเมล 2 ฉบับต่อวัน —
+> เมื่อยืนยันว่า cron ภายนอกทำงานดีแล้ว แนะนำลบบล็อก `schedule` ในไฟล์ workflow ออกเพื่อให้เหลือฉบับเดียว
 
 ## ส่งเข้า LINE แทนอีเมล (ทางเลือก)
 
