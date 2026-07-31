@@ -164,3 +164,4 @@ cython_debug/
 #.idea/
 # Generated market brief image
 scripts/market_brief.png
+scripts/market_brief.pdf

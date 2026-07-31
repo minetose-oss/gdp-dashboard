@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Daily "MARKET BRIEF" — a one-page dark-themed market image, emailed daily.
+"""Daily "MARKET BRIEF" — a one-page dark-themed market report, emailed daily.
 
 Pipeline:
-  1. Fetch index levels + daily % change (Yahoo Finance, via market_news_daily).
-  2. Fetch market headlines from free RSS feeds.
-  3. Ask Claude to write the Thai-language analysis sections (overview, per-region
-     notes, sectors to watch, event calendar, Thailand focus) from that data.
-  4. Render a dark two-column HTML brief to PNG with headless Chromium.
-  5. Email the PNG as an attachment.
+  1. Fetch index / FX / commodity / single-stock levels and daily % change
+     (Yahoo Finance, via market_news_daily).
+  2. Ask Claude to search the web for the day's real market-moving news.
+  3. Ask Claude to write the Thai-language brief from that grounded context:
+     a headline, per-region "why it moved" bullets, sectors, stocks, events.
+  4. Render the layout with headless Chromium to BOTH a PNG (share into chat)
+     and a PDF (vector text — stays sharp when zoomed on a phone or tablet).
+  5. Email both as attachments.
 
 Environment variables
 ---------------------
@@ -21,7 +23,7 @@ CHROMIUM_PATH      : optional explicit path to the Chromium binary (for sandboxe
 Usage
 -----
     python scripts/market_brief.py            # build + email
-    python scripts/market_brief.py --dry-run  # build PNG only, don't email
+    python scripts/market_brief.py --dry-run  # build files only, don't email
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ import ssl
 import sys
 from dataclasses import dataclass
 from datetime import datetime
+from email.mime.application import MIMEApplication
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -42,7 +45,9 @@ from email.header import Header
 
 from market_news_daily import fetch_quote, fetch_headlines, ICT
 
+PAGE_WIDTH = 1500  # CSS px; the layout and both outputs are sized to this
 OUT_PNG = os.path.join(os.path.dirname(__file__), "market_brief.png")
+OUT_PDF = os.path.join(os.path.dirname(__file__), "market_brief.pdf")
 
 THAI_MONTHS = ["", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
                "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
@@ -108,7 +113,8 @@ STOCKS = [
 ANALYSIS_SCHEMA = {
     "type": "object",
     "properties": {
-        "overview": {"type": "array", "items": {"type": "string"}},
+        "headline": {"type": "string"},
+        "subhead": {"type": "string"},
         "us_notes": {"type": "array", "items": {"type": "string"}},
         "europe_notes": {"type": "array", "items": {"type": "string"}},
         "asia_notes": {"type": "array", "items": {"type": "string"}},
@@ -145,7 +151,7 @@ ANALYSIS_SCHEMA = {
         }},
         "headlines_th": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["overview", "us_notes", "europe_notes", "asia_notes",
+    "required": ["headline", "subhead", "us_notes", "europe_notes", "asia_notes",
                  "emerging_notes", "sectors", "stocks", "events", "headlines_th"],
     "additionalProperties": False,
 }
@@ -238,7 +244,9 @@ def fetch_analysis(quotes: dict, headlines: list[str]) -> dict | None:
         "\n\nหุ้นรายตัว (% วันนี้):\n" + "\n".join(stock_lines) +
         news_section +
         "\n\nช่วยเขียนสรุปตามโครงสร้าง JSON โดยอ้างอิงจากข่าวจริง/ตัวเลขจริงข้างต้นเท่านั้น:\n"
-        "- overview: 2 บูลเล็ตภาพรวมตลาดวันนี้\n"
+        "- headline: พาดหัวข่าวสรุปเรื่องเด่นที่สุดของวัน สั้นกระชับแบบหัวข่าวหนังสือพิมพ์ "
+        "ไม่เกิน ~60 ตัวอักษร ใส่ตัวเลขสำคัญได้ (เช่น 'หุ้นเทคสหรัฐฯ นำตลาดโลกฟื้น Nasdaq +2.07%')\n"
+        "- subhead: ขยายความพาดหัว 1-2 ประโยค บอกสาเหตุหลักและสิ่งที่สวนทาง\n"
         "- us_notes / europe_notes / asia_notes / emerging_notes: บูลเล็ตอธิบาย "
         "'สาเหตุ/ข่าว' ที่ทำให้ดัชนีในภูมิภาคนั้นขึ้นหรือลง (2-4 บูลเล็ตต่อภูมิภาค — "
         "สหรัฐฯ ให้ละเอียดสุด เช่น หุ้น/กลุ่มที่นำตลาด, เหตุการณ์สำคัญ, ปัจจัยกดดัน) "
@@ -292,95 +300,69 @@ def _row_html(idx: Idx, quotes: dict) -> str:
             f'<div class="pct {cls}">{arrow} {q.change_pct:+.2f}%</div></div>')
 
 
-def _bullets(items: list) -> str:
-    return "".join(f'<div class="bullet">{_e(x)}</div>' for x in (items or []) if x)
-
-
-def _us_cards(items: list, quotes: dict) -> str:
-    """Big highlight cards for the headline US indices."""
-    cards = ""
-    for idx in items:
-        q = quotes.get(idx.symbol)
-        if q is None:
-            val, pct, cls = "—", "ไม่มีข้อมูล", "flat"
-        else:
-            cls = "up" if q.change_pct > 0 else "down" if q.change_pct < 0 else "flat"
-            arrow = "▲" if q.change_pct > 0 else "▼" if q.change_pct < 0 else "▪"
-            val = fmt_num(q.close)
-            pct = f"{q.change_pct:+.2f}% {arrow}"
-        cards += (f'<div class="uscard"><div class="un">{_e(idx.name)}</div>'
-                  f'<div class="uv">{val}</div>'
-                  f'<div class="up2 {cls}">{pct}</div></div>')
-    return f'<div class="usgrid">{cards}</div>'
+def _chip(idx: Idx, quotes: dict) -> str:
+    """Compact heat chip for the at-a-glance strip: name + signed %, tinted by sign."""
+    q = quotes.get(idx.symbol)
+    if q is None:
+        return (f'<div class="chip" style="background:rgba(139,149,172,.08);'
+                f'border-color:rgba(139,149,172,.2)">'
+                f'<div class="cn">{_e(idx.name)}<span class="cc">{idx.cc}</span></div>'
+                f'<div class="cp flat">—</div></div>')
+    p = q.change_pct
+    cls = "up" if p > 0 else "down" if p < 0 else "flat"
+    arrow = "▲" if p > 0 else "▼" if p < 0 else "▪"
+    tint = ("rgba(20,184,166,.13)" if p > 0 else
+            "rgba(246,70,93,.13)" if p < 0 else "rgba(139,149,172,.10)")
+    bd = ("rgba(20,184,166,.34)" if p > 0 else
+          "rgba(246,70,93,.34)" if p < 0 else "rgba(139,149,172,.25)")
+    return (f'<div class="chip" style="background:{tint};border-color:{bd}">'
+            f'<div class="cn">{_e(idx.name)}<span class="cc">{idx.cc}</span></div>'
+            f'<div class="cp {cls}">{arrow} {p:+.2f}%</div></div>')
 
 
 def build_html(quotes: dict, analysis: dict | None) -> str:
     now = datetime.now(ICT)
-    date_str = f"{now.day} {THAI_MONTHS[now.month]} {now.year}"
-    day_str = f"เช้าวัน{THAI_DAYS[now.weekday()]}"
+    date_str = (f"{THAI_DAYS[now.weekday()]} {now.day} "
+                f"{THAI_MONTHS[now.month]} {now.year}")
     a = analysis or {}
 
-    # left column: index tables, each followed by "why it moved" bullets
-    notes = {"us": a.get("us_notes"), "eu": a.get("europe_notes"),
-             "asia": a.get("asia_notes"), "em": a.get("emerging_notes")}
-    left = []
-    for title, color, items in REGIONS:
-        region_key = items[0].region
-        head = (f'<div class="sec-head">'
-                f'<span class="sec-dot" style="background:{color}"></span>'
-                f'<span class="sec-title">{title}</span></div>')
-        if region_key == "us":
-            body = _us_cards(items, quotes)
-        else:
-            body = '<div class="rows">' + "".join(_row_html(i, quotes) for i in items) + "</div>"
-        block = f'<div class="card">{head}{body}{_bullets(notes.get(region_key))}</div>'
-        left.append(block)
+    # --- lead: headline + tally of markets closing up ---
+    live = [q for idx in (i for _, _, its in REGIONS for i in its)
+            if (q := quotes.get(idx.symbol)) is not None]
+    ups, tot = sum(1 for q in live if q.change_pct > 0), len(live)
+    headline = _e(a.get("headline") or "สรุปตลาดหุ้นโลกประจำวัน")
+    subhead = _e(a.get("subhead") or "")
+    sub_html = f'<div class="sub">{subhead}</div>' if subhead else ""
+    tally = (f'<div class="tally"><b>{ups}/{tot}</b>'
+             f'<span>ตลาดหลักปิดบวก</span></div>') if tot else ""
 
-    # overview
-    ov = a.get("overview") or []
-    overview_html = "<br>".join(f"• {_e(x)}" for x in ov) or "—"
+    # --- at-a-glance heat strip, grouped by region ---
+    strip = ""
+    for title, _color, items in REGIONS:
+        cells = "".join(_chip(i, quotes) for i in items)
+        strip += (f'<div class="hgroup"><div class="hglbl">{title}</div>'
+                  f'<div class="hgrid">{cells}</div></div>')
 
-    # right column
-    sectors = a.get("sectors") or []
-    sec_cards = ""
-    for s in sectors:
-        sec_cards += (f'<div class="sector"><div class="sh">'
-                      f'<span class="nm2">{_e(s.get("name",""))}</span>'
-                      f'<span class="badge {_e(s.get("tone","ne"))}">{_e(s.get("badge",""))}</span>'
-                      f'</div><div class="sb">{_e(s.get("text",""))}</div></div>')
-    sec_block = (f'<div class="card"><div class="sec-head">'
-                 f'<span class="sec-dot" style="background:#22c55e"></span>'
-                 f'<span class="sec-title">เซกเตอร์จับตา</span></div>{sec_cards}</div>'
-                 ) if sec_cards else ""
+    # --- the story: why each region moved ---
+    notes = [("สหรัฐฯ", "#3b82f6", a.get("us_notes")),
+             ("ยุโรป", "#7c3aed", a.get("europe_notes")),
+             ("เอเชีย", "#0891b2", a.get("asia_notes")),
+             ("ตลาดเกิดใหม่", "#ea580c", a.get("emerging_notes"))]
+    story = ""
+    for title, color, items in notes:
+        lis = "".join(f"<li>{_e(x)}</li>" for x in (items or []) if x)
+        if not lis:
+            continue
+        story += (f'<div class="sblk"><div class="sh">'
+                  f'<span class="sdot" style="background:{color}"></span>{title}</div>'
+                  f'<ul class="why">{lis}</ul></div>')
 
-    events = a.get("events") or []
-    tl = ""
-    for ev in events:
-        star = '<span class="star">★</span> ' if ev.get("star") else ""
-        tl += (f'<div class="tl"><div class="when">{star}{_e(ev.get("when",""))}</div>'
-               f'<div class="what">{_e(ev.get("text",""))}</div></div>')
-    ev_block = (f'<div class="card"><div class="sec-head">'
-                f'<span class="sec-dot" style="background:#fbbf24"></span>'
-                f'<span class="sec-title">จับตาวันนี้ &amp; สัปดาห์นี้</span></div>{tl}</div>'
-                ) if tl else ""
+    # --- supporting table: every index, compact ---
+    tbl = "".join(_row_html(i, quotes) for _, _, its in REGIONS for i in its)
 
-    hls = a.get("headlines_th") or []
-    hl_block = ""
-    if hls:
-        items = "".join(f'<div class="bullet" style="margin-top:4px">{_e(h)}</div>' for h in hls)
-        hl_block = (f'<div class="card"><div class="sec-head">'
-                    f'<span class="sec-dot" style="background:#38bdf8"></span>'
-                    f'<span class="sec-title">ข่าวเด่น</span></div>{items}</div>')
-
-    extras_rows = "".join(_row_html(i, quotes) for i in EXTRAS)
-    extras_block = (f'<div class="card"><div class="sec-head">'
-                    f'<span class="sec-dot" style="background:#f59e0b"></span>'
-                    f'<span class="sec-title">ค่าเงิน · โภคภัณฑ์ · คริปโต</span></div>'
-                    f'<div class="rows">{extras_rows}</div></div>')
-
-    # single-stock news card
+    # --- right rail ---
     stock_notes = {s.get("ticker", ""): s.get("note", "") for s in (a.get("stocks") or [])}
-    stk_items = ""
+    stk = ""
     for idx in STOCKS:
         q = quotes.get(idx.symbol)
         if q is None:
@@ -388,25 +370,50 @@ def build_html(quotes: dict, analysis: dict | None) -> str:
         cls = "up" if q.change_pct > 0 else "down" if q.change_pct < 0 else "flat"
         arrow = "▲" if q.change_pct > 0 else "▼" if q.change_pct < 0 else "▪"
         note = stock_notes.get(idx.cc, "")
-        note_html = f'<div class="stk-note">{_e(note)}</div>' if note else ""
-        stk_items += (f'<div class="stk"><div class="stk-top">'
-                      f'<span class="stk-nm">{_e(idx.name)} <span class="cc">{idx.cc}</span></span>'
-                      f'<span class="pct {cls}">{arrow} {q.change_pct:+.2f}%</span></div>'
-                      f'{note_html}</div>')
-    stk_block = (f'<div class="card"><div class="sec-head">'
-                 f'<span class="sec-dot" style="background:#a78bfa"></span>'
-                 f'<span class="sec-title">หุ้นเด่นรายตัว</span></div>{stk_items}</div>'
-                 ) if stk_items else ""
+        nh = f'<div class="snote">{_e(note)}</div>' if note else ""
+        stk += (f'<div class="s"><div class="stop">'
+                f'<span class="sn">{_e(idx.name)}<span class="cc">{idx.cc}</span></span>'
+                f'<span class="sp {cls}">{arrow} {q.change_pct:+.2f}%</span></div>{nh}</div>')
+    stk_block = (f'<div class="card"><div class="sectitle">หุ้นเด่นรายตัว</div>'
+                 f'{stk}</div>') if stk else ""
 
-    right = sec_block + stk_block + ev_block + extras_block + hl_block
+    sec = ""
+    for s in (a.get("sectors") or []):
+        sec += (f'<div class="s"><div class="stop">'
+                f'<span class="sn">{_e(s.get("name",""))}</span>'
+                f'<span class="badge {_e(s.get("tone","ne"))}">{_e(s.get("badge",""))}</span>'
+                f'</div><div class="snote">{_e(s.get("text",""))}</div></div>')
+    sec_block = (f'<div class="card"><div class="sectitle">เซกเตอร์จับตา</div>'
+                 f'{sec}</div>') if sec else ""
+
+    extras = "".join(_row_html(i, quotes) for i in EXTRAS)
+    ex_block = (f'<div class="card"><div class="sectitle">'
+                f'ค่าเงิน · โภคภัณฑ์ · คริปโต</div>{extras}</div>')
+
+    evs = ""
+    for ev in (a.get("events") or []):
+        star = '<span class="star">★</span> ' if ev.get("star") else ""
+        evs += (f'<div class="ev"><span class="evw">{star}{_e(ev.get("when",""))}</span>'
+                f'<span class="evt">{_e(ev.get("text",""))}</span></div>')
+    ev_block = (f'<div class="card"><div class="sectitle">จับตาสัปดาห์นี้</div>'
+                f'{evs}</div>') if evs else ""
+
+    hls = "".join(f'<li>{_e(h)}</li>' for h in (a.get("headlines_th") or []))
+    hl_block = (f'<div class="card"><div class="sectitle">ข่าวเด่น</div>'
+                f'<ul class="why">{hls}</ul></div>') if hls else ""
 
     return _TEMPLATE.format(
-        date=date_str, day=day_str, overview=overview_html,
-        left="".join(left), right=right)
+        date=date_str, headline=headline, sub=sub_html, tally=tally,
+        strip=strip, story=story, table=tbl,
+        rail=stk_block + sec_block + ex_block + ev_block + hl_block)
 
 
-def render_png(html_text: str, out_path: str) -> None:
-    """Render the HTML to a PNG using headless Chromium."""
+def render(html_text: str, png_path: str, pdf_path: str) -> None:
+    """Render the brief once, to a PNG (inline preview) and a PDF (vector text).
+
+    The PDF keeps text as embedded vector glyphs, so it stays sharp at any zoom —
+    which is how the brief is actually read, on a phone or tablet.
+    """
     from playwright.sync_api import sync_playwright
 
     launch_kwargs = {}
@@ -416,15 +423,21 @@ def render_png(html_text: str, out_path: str) -> None:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(**launch_kwargs)
-        page = browser.new_page(viewport={"width": 1500, "height": 1000},
-                                device_scale_factor=2)
+        page = browser.new_page(viewport={"width": PAGE_WIDTH, "height": 1000},
+                                device_scale_factor=3)
         page.set_content(html_text, wait_until="networkidle")
         page.wait_for_timeout(400)
-        page.screenshot(path=out_path, full_page=True)
+        page.screenshot(path=png_path, full_page=True)
+        # One tall page, sized to the content, so the PDF never splits mid-section.
+        height = page.evaluate("document.body.scrollHeight")
+        page.pdf(path=pdf_path, width=f"{PAGE_WIDTH}px", height=f"{height}px",
+                 print_background=True,
+                 margin={"top": "0", "bottom": "0", "left": "0", "right": "0"})
         browser.close()
 
 
-def send_email_with_image(image_path: str) -> None:
+def send_email(png_path: str, pdf_path: str) -> None:
+    """Email the brief with both attachments: PDF to read, PNG to share."""
     user = os.environ.get("GMAIL_USER")
     password = os.environ.get("GMAIL_APP_PASSWORD")
     to = os.environ.get("MAIL_TO") or user
@@ -433,12 +446,21 @@ def send_email_with_image(image_path: str) -> None:
 
     date_str = datetime.now(ICT).strftime("%-d/%-m/%Y")
     msg = MIMEMultipart()
-    msg["Subject"] = Header(f"📊 MARKET BRIEF — {date_str}", "utf-8")
+    msg["Subject"] = Header(f"\U0001F4CA MARKET BRIEF \u2014 {date_str}", "utf-8")
     msg["From"] = user
     msg["To"] = to
-    msg.attach(MIMEText("สรุปตลาดหุ้นโลกประจำวัน (ดูภาพแนบ) — ส่งต่อเข้ากลุ่ม LINE ทีมได้เลย",
-                        "plain", "utf-8"))
-    with open(image_path, "rb") as f:
+    msg.attach(MIMEText(
+        "สรุปตลาดหุ้นโลกประจำวัน\n\n"
+        "\u2022 market-brief.pdf \u2014 เปิดอ่าน/ซูมบนมือถือหรือ iPad ตัวหนังสือคมทุกระดับ\n"
+        "\u2022 market-brief.png \u2014 รูปภาพ สำหรับส่งต่อเข้ากลุ่ม LINE ทีม\n",
+        "plain", "utf-8"))
+
+    with open(pdf_path, "rb") as f:
+        pdf = MIMEApplication(f.read(), _subtype="pdf")
+    pdf.add_header("Content-Disposition", "attachment", filename="market-brief.pdf")
+    msg.attach(pdf)
+
+    with open(png_path, "rb") as f:
         img = MIMEImage(f.read(), _subtype="png")
     img.add_header("Content-Disposition", "attachment", filename="market-brief.png")
     msg.attach(img)
@@ -453,7 +475,7 @@ def send_email_with_image(image_path: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Daily MARKET BRIEF image")
     parser.add_argument("--dry-run", action="store_true",
-                        help="build the PNG but do not email it")
+                        help="build the files but do not email them")
     args = parser.parse_args()
 
     symbols = [idx.symbol for _, _, items in REGIONS for idx in items]
@@ -469,94 +491,126 @@ def main() -> int:
     analysis = fetch_analysis(quotes, headlines)
 
     html_text = build_html(quotes, analysis)
-    render_png(html_text, OUT_PNG)
-    print(f"Rendered {OUT_PNG}")
+    render(html_text, OUT_PNG, OUT_PDF)
+    print(f"Rendered {OUT_PNG} and {OUT_PDF}")
 
     if args.dry_run:
         return 0
 
-    send_email_with_image(OUT_PNG)
+    send_email(OUT_PNG, OUT_PDF)
     return 0
 
 
 _TEMPLATE = """<!DOCTYPE html>
 <html lang="th"><head><meta charset="UTF-8"><style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ width:1500px; font-family:"Loma","Noto Sans Thai",sans-serif; background:#080c18; color:#e6eaf4; }}
-  .page {{ width:1500px; padding:38px 44px 30px; background:radial-gradient(1200px 600px at 80% -10%, #14224a 0%, #080c18 55%); }}
-  .top {{ display:flex; justify-content:space-between; align-items:flex-end; padding-bottom:22px; border-bottom:1px solid #1e2942; }}
-  .brand {{ font-size:40px; font-weight:700; letter-spacing:2px; }}
-  .brand .dot {{ color:#3b82f6; }}
-  .brand-sub {{ font-size:19px; color:#8b95ac; margin-top:6px; letter-spacing:.5px; }}
-  .date {{ font-size:27px; font-weight:700; text-align:right; }}
-  .date .day {{ font-size:18px; color:#8b95ac; font-weight:400; margin-top:4px; }}
-  .overview {{ margin-top:20px; background:#0f1730; border:1px solid #212b47; border-radius:14px; padding:16px 22px; }}
-  .overview .oh {{ font-size:19px; font-weight:700; color:#cfd6e6; margin-bottom:8px; }}
-  .overview .ob {{ font-size:18px; color:#aab3c8; line-height:1.55; }}
-  .cols {{ display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:22px; }}
-  .col {{ display:flex; flex-direction:column; gap:20px; }}
-  .sec-head {{ display:flex; align-items:center; gap:11px; margin-bottom:13px; }}
-  .sec-dot {{ width:11px; height:11px; border-radius:50%; }}
-  .sec-title {{ font-size:23px; font-weight:700; color:#eef1f8; }}
-  .usgrid {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; }}
-  .uscard {{ background:#101a34; border:1px solid #26406e; border-radius:14px; padding:16px 18px; }}
-  .uscard .un {{ font-size:16px; font-weight:600; color:#9aa4ba; }}
-  .uscard .uv {{ font-size:30px; font-weight:700; color:#f2f5fb; margin:7px 0 5px; }}
-  .uscard .up2 {{ font-size:17px; font-weight:700; }}
-  .rows {{ display:flex; flex-direction:column; }}
-  .row {{ display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:18px; padding:12px 4px; border-bottom:1px solid #161f36; }}
+  body {{ width:1500px; font-family:"Loma","Noto Sans Thai",sans-serif;
+    background:#080c18; color:#eef1f8; }}
+  .page {{ padding:40px 48px 30px;
+    background:radial-gradient(1000px 460px at 82% -14%, #152449 0%, #080c18 60%); }}
+  .top {{ display:flex; justify-content:space-between; align-items:baseline;
+    padding-bottom:16px; border-bottom:1px solid #212b47; }}
+  .brand {{ font-size:29px; font-weight:700; letter-spacing:2.5px; }}
+  .brand span {{ color:#3b82f6; }}
+  .dt {{ font-size:18px; color:#aab3c8; font-weight:600; }}
+  /* lead */
+  .lead {{ padding:26px 0 22px; border-bottom:1px solid #212b47; }}
+  .kicker {{ font-size:14px; letter-spacing:2px; color:#7fb0ff; font-weight:700;
+    margin-bottom:11px; }}
+  h1 {{ font-size:41px; line-height:1.24; font-weight:700; letter-spacing:-.3px;
+    max-width:1200px; }}
+  .sub {{ font-size:19px; color:#aab3c8; line-height:1.55; margin-top:13px;
+    max-width:1200px; }}
+  .tally {{ display:inline-flex; align-items:baseline; gap:9px; margin-top:16px;
+    background:rgba(20,184,166,.12); border:1px solid rgba(20,184,166,.3);
+    border-radius:999px; padding:7px 17px; }}
+  .tally b {{ font-size:22px; color:#14b8a6; font-weight:700; }}
+  .tally span {{ font-size:15px; color:#aab3c8; }}
+  /* heat strip */
+  .strip {{ display:grid; grid-template-columns:repeat(4,1fr); gap:22px;
+    padding:22px 0 24px; border-bottom:1px solid #212b47; align-items:start; }}
+  .hglbl {{ font-size:13px; letter-spacing:1.5px; text-transform:uppercase;
+    color:#7c86a0; font-weight:700; margin-bottom:10px; }}
+  .hgrid {{ display:flex; flex-direction:column; gap:7px; }}
+  .chip {{ display:flex; justify-content:space-between; align-items:center;
+    border:1px solid; border-radius:9px; padding:8px 12px; }}
+  .cn {{ font-size:16.5px; font-weight:600; color:#eef1f8; }}
+  .cp {{ font-size:16px; font-weight:700; font-variant-numeric:tabular-nums; }}
+  /* body */
+  .body {{ display:grid; grid-template-columns:1.22fr 1fr; gap:34px; padding-top:24px; }}
+  .sectitle {{ font-size:14px; font-weight:700; color:#7c86a0; letter-spacing:1.7px;
+    text-transform:uppercase; margin-bottom:14px; }}
+  .sblk {{ margin-bottom:19px; }}
+  .sh {{ display:flex; align-items:center; gap:9px; font-size:19px; font-weight:700;
+    margin-bottom:7px; }}
+  .sdot {{ width:9px; height:9px; border-radius:50%; }}
+  .why {{ list-style:none; }}
+  .why li {{ font-size:17px; color:#aab3c8; line-height:1.55; padding:5px 0 5px 21px;
+    position:relative; }}
+  .why li::before {{ content:""; position:absolute; left:3px; top:14px; width:7px;
+    height:7px; border-radius:50%; background:#31456f; }}
+  /* rows (index table + extras) */
+  .row {{ display:grid; grid-template-columns:1fr auto 96px; gap:12px;
+    align-items:baseline; padding:8px 0; border-bottom:1px solid #1b2440; }}
   .row:last-child {{ border-bottom:none; }}
-  .nm {{ font-size:20px; font-weight:600; color:#dbe1ee; }}
-  .cc {{ font-size:14px; color:#7c86a0; font-weight:600; margin-left:5px; letter-spacing:.5px; }}
-  .val {{ font-size:21px; font-weight:700; color:#f2f5fb; text-align:right; min-width:110px; }}
-  .pct {{ font-size:19px; font-weight:700; text-align:right; min-width:96px; }}
-  .up {{ color:#22c55e; }} .down {{ color:#f6465d; }} .flat {{ color:#8b95ac; }}
-  .bullet {{ font-size:16.5px; color:#9aa4ba; line-height:1.5; margin-top:11px; padding-left:20px; position:relative; }}
-  .bullet::before {{ content:"▸"; position:absolute; left:0; color:#3b82f6; }}
-  .card {{ background:#0f1730; border:1px solid #212b47; border-radius:16px; padding:20px 24px; }}
-  .thai {{ background:linear-gradient(135deg,#12213f,#0f1730); border:1px solid #26406e; border-radius:14px; padding:15px 20px; margin-top:12px; }}
-  .thai .th-h {{ font-size:17px; font-weight:700; color:#7fb0ff; margin-bottom:7px; }}
-  .thai .th-h .tag {{ background:#1d3357; color:#9cc2ff; font-size:13px; padding:2px 9px; border-radius:20px; margin-right:8px; }}
-  .thai .th-b {{ font-size:16.5px; color:#aab3c8; line-height:1.55; }}
-  .sector {{ background:#101a34; border:1px solid #212b47; border-radius:14px; padding:16px 20px; margin-bottom:14px; }}
-  .sector:last-child {{ margin-bottom:0; }}
-  .sector .sh {{ display:flex; align-items:center; gap:10px; margin-bottom:8px; }}
-  .sector .sh .nm2 {{ font-size:19px; font-weight:700; color:#eef1f8; }}
-  .badge {{ font-size:13px; padding:2px 11px; border-radius:20px; font-weight:600; }}
+  .nm {{ font-size:17px; font-weight:600; color:#dbe1ee; }}
+  .cc {{ font-size:11.5px; color:#7c86a0; font-weight:600; margin-left:7px;
+    letter-spacing:.5px; }}
+  .val {{ font-size:16.5px; color:#7c86a0; text-align:right;
+    font-variant-numeric:tabular-nums; }}
+  .pct {{ font-size:16.5px; font-weight:700; text-align:right;
+    font-variant-numeric:tabular-nums; }}
+  .up {{ color:#14b8a6; }} .down {{ color:#f6465d; }} .flat {{ color:#8b95ac; }}
+  .tbl {{ display:grid; grid-template-columns:repeat(2,1fr); gap:0 26px; }}
+  /* right rail */
+  .card {{ background:#0f1730; border:1px solid #212b47; border-radius:15px;
+    padding:19px 22px; margin-bottom:18px; }}
+  .s {{ padding:10px 0; border-bottom:1px solid #1b2440; }}
+  .s:last-child {{ border-bottom:none; }}
+  .stop {{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; }}
+  .sn {{ font-size:18px; font-weight:600; }}
+  .sp {{ font-size:17px; font-weight:700; font-variant-numeric:tabular-nums; }}
+  .snote {{ font-size:15px; color:#7c86a0; margin-top:3px; line-height:1.42; }}
+  .badge {{ font-size:12.5px; padding:2px 10px; border-radius:20px; font-weight:600;
+    white-space:nowrap; }}
   .badge.hi {{ background:#3a1d2a; color:#f78ba3; }}
-  .badge.re {{ background:#173a2a; color:#6ee7a8; }}
+  .badge.re {{ background:#123b33; color:#5fd6bd; }}
   .badge.ne {{ background:#2a3350; color:#a9b6d6; }}
-  .sector .sb {{ font-size:16.5px; color:#a3adc4; line-height:1.55; }}
-  .tl {{ display:flex; gap:16px; padding:13px 0; border-bottom:1px solid #161f36; }}
-  .tl:last-child {{ border-bottom:none; }}
-  .tl .when {{ font-size:16px; font-weight:700; color:#7fb0ff; min-width:104px; }}
-  .tl .what {{ font-size:16.5px; color:#a3adc4; line-height:1.5; }}
+  .ev {{ display:flex; gap:14px; padding:10px 0; border-bottom:1px solid #1b2440; }}
+  .ev:last-child {{ border-bottom:none; }}
+  .evw {{ font-size:15px; font-weight:700; color:#7fb0ff; min-width:104px; }}
+  .evt {{ font-size:15.5px; color:#aab3c8; line-height:1.42; }}
   .star {{ color:#fbbf24; }}
-  .stk {{ padding:11px 2px; border-bottom:1px solid #161f36; }}
-  .stk:last-child {{ border-bottom:none; }}
-  .stk-top {{ display:flex; justify-content:space-between; align-items:center; }}
-  .stk-nm {{ font-size:19px; font-weight:600; color:#dbe1ee; }}
-  .stk-note {{ font-size:15.5px; color:#8b95ac; line-height:1.45; margin-top:5px; }}
-  .foot {{ margin-top:26px; padding-top:16px; border-top:1px solid #1e2942; display:flex; justify-content:space-between; align-items:flex-start; }}
-  .foot .src {{ font-size:15px; color:#7c86a0; line-height:1.5; max-width:1150px; }}
-  .foot .logo {{ font-size:22px; font-weight:700; letter-spacing:2px; color:#2e3c5e; }}
-  .disc {{ font-size:14px; color:#5c667e; margin-top:8px; line-height:1.5; }}
+  .foot {{ margin-top:22px; padding-top:14px; border-top:1px solid #212b47;
+    display:flex; justify-content:space-between; font-size:13px; color:#5c667e; }}
 </style></head><body><div class="page">
   <div class="top">
-    <div><div class="brand"><span class="dot">📊</span> MARKET BRIEF</div>
-      <div class="brand-sub">สรุปตลาดหุ้นโลก · ประจำวัน</div></div>
-    <div class="date">{date}<div class="day">{day}</div></div>
+    <div class="brand"><span>&#9670;</span> MARKET BRIEF</div>
+    <div class="dt">{date}</div>
   </div>
-  <div class="overview"><div class="oh">🌐 ภาพรวมตลาด</div><div class="ob">{overview}</div></div>
-  <div class="cols">
-    <div class="col">{left}</div>
-    <div class="col">{right}</div>
+
+  <div class="lead">
+    <div class="kicker">สรุปตลาดหุ้นโลกวันนี้</div>
+    <h1>{headline}</h1>
+    {sub}
+    {tally}
   </div>
-  <div class="foot">
-    <div class="src">แหล่งอ้างอิง: Yahoo Finance · CNBC · MarketWatch · Reuters
-      <div class="disc">หมายเหตุ: ตัวเลขเป็นราคาปิดล่าสุด/ระหว่างวันของแต่ละตลาด (ต่างโซนเวลา) · จัดทำเพื่อให้ข้อมูลเท่านั้น มิใช่คำแนะนำการลงทุน</div>
+
+  <div class="strip">{strip}</div>
+
+  <div class="body">
+    <div>
+      <div class="sectitle">อะไรทำให้ตลาดขึ้น–ลง</div>
+      {story}
+      <div class="sectitle" style="margin-top:26px">ดัชนีทั้งหมด</div>
+      <div class="tbl">{table}</div>
     </div>
-    <div class="logo">MARKET BRIEF</div>
+    <div>{rail}</div>
+  </div>
+
+  <div class="foot">
+    <span>Yahoo Finance &middot; CNBC &middot; MarketWatch &middot; Reuters</span>
+    <span>ราคาปิดล่าสุดของแต่ละตลาด (ต่างโซนเวลา) &middot; มิใช่คำแนะนำการลงทุน</span>
   </div>
 </div></body></html>"""
 
