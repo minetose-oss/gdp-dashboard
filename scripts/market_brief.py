@@ -45,7 +45,7 @@ from email.header import Header
 
 from market_news_daily import fetch_quote, fetch_headlines, ICT
 
-PAGE_WIDTH = 1500  # CSS px; the layout and both outputs are sized to this
+PAGE_WIDTH = 1080  # CSS px — portrait, sized for reading on a phone/tablet
 OUT_PNG = os.path.join(os.path.dirname(__file__), "market_brief.png")
 OUT_PDF = os.path.join(os.path.dirname(__file__), "market_brief.pdf")
 
@@ -245,7 +245,7 @@ def fetch_analysis(quotes: dict, headlines: list[str]) -> dict | None:
         news_section +
         "\n\nช่วยเขียนสรุปตามโครงสร้าง JSON โดยอ้างอิงจากข่าวจริง/ตัวเลขจริงข้างต้นเท่านั้น:\n"
         "- headline: พาดหัวข่าวสรุปเรื่องเด่นที่สุดของวัน สั้นกระชับแบบหัวข่าวหนังสือพิมพ์ "
-        "ไม่เกิน ~60 ตัวอักษร ใส่ตัวเลขสำคัญได้ (เช่น 'หุ้นเทคสหรัฐฯ นำตลาดโลกฟื้น Nasdaq +2.07%')\n"
+        "ไม่เกิน ~60 ตัวอักษร อ้างชื่อดัชนี/หุ้น และตัวเลข % ได้เฉพาะที่ปรากฏในข้อมูลข้างต้น\n"
         "- subhead: ขยายความพาดหัว 1-2 ประโยค บอกสาเหตุหลักและสิ่งที่สวนทาง\n"
         "- us_notes / europe_notes / asia_notes / emerging_notes: บูลเล็ตอธิบาย "
         "'สาเหตุ/ข่าว' ที่ทำให้ดัชนีในภูมิภาคนั้นขึ้นหรือลง (2-4 บูลเล็ตต่อภูมิภาค — "
@@ -256,8 +256,10 @@ def fetch_analysis(quotes: dict, headlines: list[str]) -> dict | None:
         "- stocks: ข่าว/ความเคลื่อนไหวหุ้นรายตัวสั้นๆ (1 บรรทัด) ให้ครบทุกตัวในลิสต์ "
         "โดย ticker ต้องตรงกับที่ให้มา (NVDA, TSM, AAPL, MSFT, TSLA, META) "
         "อิงจาก % จริง + บริบทกลุ่ม/ข่าว ห้ามกุเหตุการณ์เฉพาะเจาะจงที่ไม่มีในข่าว\n"
-        "- events: 3-4 เหตุการณ์จับตาวันนี้/สัปดาห์นี้ แต่ละอันมี when (เช่น 'พฤ. 2 ก.ค.'), "
-        "star (true เฉพาะอันสำคัญสุด), text\n"
+        f"- events: 3-4 เหตุการณ์จับตา โดยต้องเป็นวัน {date_str} หรือหลังจากนั้นเท่านั้น "
+        "ห้ามใส่เหตุการณ์ที่ผ่านไปแล้ว · แต่ละอันมี when (วัน+เดือนไทยแบบย่อของวันที่นั้นจริงๆ), "
+        "star (true เฉพาะอันสำคัญสุด), text · ถ้าไม่พบเหตุการณ์ที่ยืนยันได้จากข่าว "
+        "ให้ส่ง events เป็นลิสต์ว่าง ห้ามเดาปฏิทินเศรษฐกิจเอง\n"
         "- headlines_th: แปล/สรุปข่าวเด่นจริง 3 อันเป็นไทยสั้นๆ"
     )
     # Step 2: structure the analysis as JSON (no tools, so the schema is honored).
@@ -504,9 +506,9 @@ def main() -> int:
 _TEMPLATE = """<!DOCTYPE html>
 <html lang="th"><head><meta charset="UTF-8"><style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ width:1500px; font-family:"Loma","Noto Sans Thai",sans-serif;
+  body {{ width:1080px; font-family:"Loma","Noto Sans Thai",sans-serif;
     background:#080c18; color:#eef1f8; }}
-  .page {{ padding:40px 48px 30px;
+  .page {{ padding:38px 40px 28px;
     background:radial-gradient(1000px 460px at 82% -14%, #152449 0%, #080c18 60%); }}
   .top {{ display:flex; justify-content:space-between; align-items:baseline;
     padding-bottom:16px; border-bottom:1px solid #212b47; }}
@@ -517,35 +519,35 @@ _TEMPLATE = """<!DOCTYPE html>
   .lead {{ padding:26px 0 22px; border-bottom:1px solid #212b47; }}
   .kicker {{ font-size:14px; letter-spacing:2px; color:#7fb0ff; font-weight:700;
     margin-bottom:11px; }}
-  h1 {{ font-size:41px; line-height:1.24; font-weight:700; letter-spacing:-.3px;
-    max-width:1200px; }}
-  .sub {{ font-size:19px; color:#aab3c8; line-height:1.55; margin-top:13px;
-    max-width:1200px; }}
+  h1 {{ font-size:44px; line-height:1.26; font-weight:700; letter-spacing:-.3px; }}
+  .sub {{ font-size:21px; color:#aab3c8; line-height:1.58; margin-top:14px; }}
   .tally {{ display:inline-flex; align-items:baseline; gap:9px; margin-top:16px;
     background:rgba(20,184,166,.12); border:1px solid rgba(20,184,166,.3);
     border-radius:999px; padding:7px 17px; }}
   .tally b {{ font-size:22px; color:#14b8a6; font-weight:700; }}
   .tally span {{ font-size:15px; color:#aab3c8; }}
   /* heat strip */
-  .strip {{ display:grid; grid-template-columns:repeat(4,1fr); gap:22px;
+  .strip {{ display:grid; grid-template-columns:repeat(2,1fr); gap:20px 26px;
     padding:22px 0 24px; border-bottom:1px solid #212b47; align-items:start; }}
   .hglbl {{ font-size:13px; letter-spacing:1.5px; text-transform:uppercase;
     color:#7c86a0; font-weight:700; margin-bottom:10px; }}
   .hgrid {{ display:flex; flex-direction:column; gap:7px; }}
   .chip {{ display:flex; justify-content:space-between; align-items:center;
     border:1px solid; border-radius:9px; padding:8px 12px; }}
-  .cn {{ font-size:16.5px; font-weight:600; color:#eef1f8; }}
-  .cp {{ font-size:16px; font-weight:700; font-variant-numeric:tabular-nums; }}
+  .cn {{ font-size:18px; font-weight:600; color:#eef1f8; }}
+  .cp {{ font-size:17.5px; font-weight:700; font-variant-numeric:tabular-nums; }}
   /* body */
-  .body {{ display:grid; grid-template-columns:1.22fr 1fr; gap:34px; padding-top:24px; }}
-  .sectitle {{ font-size:14px; font-weight:700; color:#7c86a0; letter-spacing:1.7px;
+  .body {{ padding-top:24px; }}
+  .rail {{ display:grid; grid-template-columns:1fr 1fr; gap:0 18px;
+    align-items:start; margin-top:8px; }}
+  .sectitle {{ font-size:15px; font-weight:700; color:#7c86a0; letter-spacing:1.7px;
     text-transform:uppercase; margin-bottom:14px; }}
   .sblk {{ margin-bottom:19px; }}
-  .sh {{ display:flex; align-items:center; gap:9px; font-size:19px; font-weight:700;
+  .sh {{ display:flex; align-items:center; gap:9px; font-size:21px; font-weight:700;
     margin-bottom:7px; }}
   .sdot {{ width:9px; height:9px; border-radius:50%; }}
   .why {{ list-style:none; }}
-  .why li {{ font-size:17px; color:#aab3c8; line-height:1.55; padding:5px 0 5px 21px;
+  .why li {{ font-size:18.5px; color:#aab3c8; line-height:1.55; padding:5px 0 5px 21px;
     position:relative; }}
   .why li::before {{ content:""; position:absolute; left:3px; top:14px; width:7px;
     height:7px; border-radius:50%; background:#31456f; }}
@@ -553,24 +555,24 @@ _TEMPLATE = """<!DOCTYPE html>
   .row {{ display:grid; grid-template-columns:1fr auto 96px; gap:12px;
     align-items:baseline; padding:8px 0; border-bottom:1px solid #1b2440; }}
   .row:last-child {{ border-bottom:none; }}
-  .nm {{ font-size:17px; font-weight:600; color:#dbe1ee; }}
+  .nm {{ font-size:18px; font-weight:600; color:#dbe1ee; }}
   .cc {{ font-size:11.5px; color:#7c86a0; font-weight:600; margin-left:7px;
     letter-spacing:.5px; }}
-  .val {{ font-size:16.5px; color:#7c86a0; text-align:right;
+  .val {{ font-size:17.5px; color:#7c86a0; text-align:right;
     font-variant-numeric:tabular-nums; }}
-  .pct {{ font-size:16.5px; font-weight:700; text-align:right;
+  .pct {{ font-size:17.5px; font-weight:700; text-align:right;
     font-variant-numeric:tabular-nums; }}
   .up {{ color:#14b8a6; }} .down {{ color:#f6465d; }} .flat {{ color:#8b95ac; }}
-  .tbl {{ display:grid; grid-template-columns:repeat(2,1fr); gap:0 26px; }}
+  .tbl {{ display:grid; grid-template-columns:repeat(2,1fr); gap:0 22px; }}
   /* right rail */
   .card {{ background:#0f1730; border:1px solid #212b47; border-radius:15px;
     padding:19px 22px; margin-bottom:18px; }}
   .s {{ padding:10px 0; border-bottom:1px solid #1b2440; }}
   .s:last-child {{ border-bottom:none; }}
   .stop {{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; }}
-  .sn {{ font-size:18px; font-weight:600; }}
-  .sp {{ font-size:17px; font-weight:700; font-variant-numeric:tabular-nums; }}
-  .snote {{ font-size:15px; color:#7c86a0; margin-top:3px; line-height:1.42; }}
+  .sn {{ font-size:19px; font-weight:600; }}
+  .sp {{ font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; }}
+  .snote {{ font-size:16.5px; color:#7c86a0; margin-top:3px; line-height:1.42; }}
   .badge {{ font-size:12.5px; padding:2px 10px; border-radius:20px; font-weight:600;
     white-space:nowrap; }}
   .badge.hi {{ background:#3a1d2a; color:#f78ba3; }}
@@ -578,8 +580,8 @@ _TEMPLATE = """<!DOCTYPE html>
   .badge.ne {{ background:#2a3350; color:#a9b6d6; }}
   .ev {{ display:flex; gap:14px; padding:10px 0; border-bottom:1px solid #1b2440; }}
   .ev:last-child {{ border-bottom:none; }}
-  .evw {{ font-size:15px; font-weight:700; color:#7fb0ff; min-width:104px; }}
-  .evt {{ font-size:15.5px; color:#aab3c8; line-height:1.42; }}
+  .evw {{ font-size:16px; font-weight:700; color:#7fb0ff; min-width:104px; }}
+  .evt {{ font-size:16.5px; color:#aab3c8; line-height:1.42; }}
   .star {{ color:#fbbf24; }}
   .foot {{ margin-top:22px; padding-top:14px; border-top:1px solid #212b47;
     display:flex; justify-content:space-between; font-size:13px; color:#5c667e; }}
@@ -599,13 +601,11 @@ _TEMPLATE = """<!DOCTYPE html>
   <div class="strip">{strip}</div>
 
   <div class="body">
-    <div>
-      <div class="sectitle">อะไรทำให้ตลาดขึ้น–ลง</div>
-      {story}
-      <div class="sectitle" style="margin-top:26px">ดัชนีทั้งหมด</div>
-      <div class="tbl">{table}</div>
-    </div>
-    <div>{rail}</div>
+    <div class="sectitle">อะไรทำให้ตลาดขึ้น–ลง</div>
+    {story}
+    <div class="rail">{rail}</div>
+    <div class="sectitle" style="margin-top:22px">ดัชนีทั้งหมด</div>
+    <div class="tbl">{table}</div>
   </div>
 
   <div class="foot">
