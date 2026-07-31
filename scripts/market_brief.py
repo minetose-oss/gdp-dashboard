@@ -251,7 +251,8 @@ def fetch_analysis(quotes: dict, headlines: list[str]) -> dict | None:
         "'สาเหตุ/ข่าว' ที่ทำให้ดัชนีในภูมิภาคนั้นขึ้นหรือลง (2-4 บูลเล็ตต่อภูมิภาค — "
         "สหรัฐฯ ให้ละเอียดสุด เช่น หุ้น/กลุ่มที่นำตลาด, เหตุการณ์สำคัญ, ปัจจัยกดดัน) "
         "อิงจากตัวเลขจริง + พาดหัวข่าว ห้ามกุเหตุการณ์เฉพาะที่ไม่มีในข่าว\n"
-        "- sectors: 2-3 เซกเตอร์จับตา แต่ละอันมี name, badge (ป้ายสั้นๆ เช่น 'ผันผวนสูง'), "
+        "- sectors: 4-6 เซกเตอร์จับตา ให้ครอบคลุมหลายอุตสาหกรรม (เช่น เทค/ชิป, พลังงาน, การเงิน/ธนาคาร, "
+        "ยานยนต์/EV, สินค้าโภคภัณฑ์, สุขภาพ) แต่ละอันมี name, badge (ป้ายสั้นๆ เช่น 'ผันผวนสูง'), "
         "tone ('hi'=ลบ/เสี่ยง, 're'=บวก/ฟื้น, 'ne'=กลาง), text (บทวิเคราะห์สั้น)\n"
         "- stocks: ข่าว/ความเคลื่อนไหวหุ้นรายตัวสั้นๆ (1 บรรทัด) ให้ครบทุกตัวในลิสต์ "
         "โดย ticker ต้องตรงกับที่ให้มา (NVDA, TSM, AAPL, MSFT, TSLA, META) "
@@ -527,8 +528,9 @@ _TEMPLATE = """<!DOCTYPE html>
   .tally b {{ font-size:22px; color:#14b8a6; font-weight:700; }}
   .tally span {{ font-size:15px; color:#aab3c8; }}
   /* heat strip */
-  .strip {{ display:grid; grid-template-columns:repeat(2,1fr); gap:20px 26px;
-    padding:22px 0 24px; border-bottom:1px solid #212b47; align-items:start; }}
+  .strip {{ column-count:2; column-gap:26px; padding:22px 0 20px;
+    border-bottom:1px solid #212b47; }}
+  .hgroup {{ break-inside:avoid; margin-bottom:18px; }}
   .hglbl {{ font-size:13px; letter-spacing:1.5px; text-transform:uppercase;
     color:#7c86a0; font-weight:700; margin-bottom:10px; }}
   .hgrid {{ display:flex; flex-direction:column; gap:7px; }}
@@ -538,16 +540,21 @@ _TEMPLATE = """<!DOCTYPE html>
   .cp {{ font-size:17.5px; font-weight:700; font-variant-numeric:tabular-nums; }}
   /* body */
   .body {{ padding-top:24px; }}
-  .rail {{ display:grid; grid-template-columns:1fr 1fr; gap:0 18px;
-    align-items:start; margin-top:8px; }}
+  .rail {{ column-count:2; column-gap:18px; margin-top:10px; }}
+  .rail .card {{ break-inside:avoid; }}
   .sectitle {{ font-size:15px; font-weight:700; color:#7c86a0; letter-spacing:1.7px;
     text-transform:uppercase; margin-bottom:14px; }}
-  .sblk {{ margin-bottom:19px; }}
-  .sh {{ display:flex; align-items:center; gap:9px; font-size:21px; font-weight:700;
-    margin-bottom:7px; }}
+  .sectitle.lg {{ font-size:18px; color:#9aa4ba; margin-bottom:18px; }}
+  .sblk {{ margin-bottom:22px; }}
+  .sh {{ display:flex; align-items:center; gap:10px; font-size:23px; font-weight:700;
+    margin-bottom:9px; }}
+  /* the story bullets carry the brief — larger and lighter than body copy */
+  .story .why li {{ font-size:23px; line-height:1.5; color:#c9d2e4;
+    padding:9px 0 9px 26px; }}
+  .story .why li::before {{ top:20px; width:8px; height:8px; background:#3d5687; }}
   .sdot {{ width:9px; height:9px; border-radius:50%; }}
   .why {{ list-style:none; }}
-  .why li {{ font-size:18.5px; color:#aab3c8; line-height:1.55; padding:5px 0 5px 21px;
+  .why li {{ font-size:19px; color:#aab3c8; line-height:1.55; padding:5px 0 5px 21px;
     position:relative; }}
   .why li::before {{ content:""; position:absolute; left:3px; top:14px; width:7px;
     height:7px; border-radius:50%; background:#31456f; }}
@@ -601,8 +608,8 @@ _TEMPLATE = """<!DOCTYPE html>
   <div class="strip">{strip}</div>
 
   <div class="body">
-    <div class="sectitle">อะไรทำให้ตลาดขึ้น–ลง</div>
-    {story}
+    <div class="sectitle lg">อะไรทำให้ตลาดขึ้น–ลง</div>
+    <div class="story">{story}</div>
     <div class="rail">{rail}</div>
     <div class="sectitle" style="margin-top:22px">ดัชนีทั้งหมด</div>
     <div class="tbl">{table}</div>
