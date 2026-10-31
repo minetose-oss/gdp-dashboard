@@ -20,6 +20,9 @@ on:
 jobs:
   send-brief:
     runs-on: ubuntu-latest
+    # Needed by the keepalive step below, which pushes a timestamp commit.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -52,3 +55,34 @@ jobs:
         with:
           name: market-brief
           path: scripts/market_brief.png
+
+      # GitHub automatically disables a scheduled workflow after 60 days with
+      # no repository activity. That is exactly what happened here: the last
+      # commit was 2026-07-31, the workflow was disabled (disabled_inactivity)
+      # around 2026-09-30, and the brief silently stopped arriving on
+      # 2026-10-01 — nothing in the code had broken.
+      #
+      # To stop that recurring, push a dated timestamp whenever the repository
+      # has been quiet for 20+ days. That resets the inactivity clock long
+      # before it reaches 60, and costs about 18 tiny commits a year.
+      #
+      # A push made with GITHUB_TOKEN does not trigger workflow runs, so this
+      # cannot loop. It is also best-effort: a failure here must never be
+      # reported as a failure to send the brief.
+      - name: Keep the schedule alive
+        if: ${{ always() && github.event.inputs.dry_run != 'true' }}
+        continue-on-error: true
+        run: |
+          set -u
+          quiet_days=$(( ( $(date +%s) - $(git log -1 --format=%ct) ) / 86400 ))
+          echo "Repository has been quiet for ${quiet_days} day(s)."
+          if [ "$quiet_days" -lt 20 ]; then
+            echo "Under the 20-day threshold — nothing to do."
+            exit 0
+          fi
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/keepalive
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/keepalive
+          git commit -m "chore: keep the scheduled market brief alive"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
