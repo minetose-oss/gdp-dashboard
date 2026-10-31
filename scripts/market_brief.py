@@ -46,6 +46,11 @@ from email.header import Header
 from market_news_daily import fetch_quote, fetch_headlines, ICT
 
 PAGE_WIDTH = 1080  # CSS px — portrait, sized for reading on a phone/tablet
+# Claude Opus 5.5 — cheaper per token than Opus 4.8 ($4/$20 vs $5/$25 per 1M)
+# and more capable. This code needed no other changes to move: it never forced
+# tool use and never configured thinking, both of which the newer model rejects.
+MODEL = "claude-opus-5-5"
+
 OUT_PNG = os.path.join(os.path.dirname(__file__), "market_brief.png")
 OUT_PDF = os.path.join(os.path.dirname(__file__), "market_brief.pdf")
 
@@ -181,7 +186,17 @@ def _web_search_news(client, date_str: str) -> str:
         resp = None
         for _ in range(4):  # follow the server-side search loop across pause_turn
             resp = client.messages.create(
-                model="claude-opus-4-8", max_tokens=3000, tools=tools, messages=messages,
+                model=MODEL,
+                # Thinking is always on and cannot be disabled on this model, and
+                # thinking tokens count against max_tokens — so the ceiling has to
+                # leave room for both the reasoning and the summary, or the text
+                # gets silently truncated mid-sentence.
+                max_tokens=8000,
+                # This model defaults to "medium" effort (the previous one defaulted
+                # to "high"), so state it rather than inherit a silent change.
+                output_config={"effort": "medium"},
+                tools=tools,
+                messages=messages,
             )
             if resp.stop_reason == "pause_turn":
                 messages = [messages[0], {"role": "assistant", "content": resp.content}]
@@ -266,8 +281,9 @@ def fetch_analysis(quotes: dict, headlines: list[str]) -> dict | None:
     # Step 2: structure the analysis as JSON (no tools, so the schema is honored).
     try:
         resp = client.messages.create(
-            model="claude-opus-4-8",
-            max_tokens=2500,
+            model=MODEL,
+            # Room for the always-on thinking plus the JSON body (see above).
+            max_tokens=8000,
             system=ANALYSIS_SYSTEM,
             output_config={"effort": "low",
                            "format": {"type": "json_schema", "schema": ANALYSIS_SCHEMA}},
