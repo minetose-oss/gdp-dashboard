@@ -320,13 +320,18 @@ def _row_html(idx: Idx, quotes: dict) -> str:
 
 
 def _chip(idx: Idx, quotes: dict) -> str:
-    """Compact heat chip for the at-a-glance strip: name + signed %, tinted by sign."""
+    """Heat chip for the index strip: name, closing level and signed %, tinted by sign.
+
+    This strip is the brief's only index listing, so it carries the level too —
+    an earlier version repeated every index in a second table at the bottom just
+    to show the level, which duplicated the % change for no gain.
+    """
     q = quotes.get(idx.symbol)
     if q is None:
         return (f'<div class="chip" style="background:rgba(139,149,172,.08);'
                 f'border-color:rgba(139,149,172,.2)">'
                 f'<div class="cn">{_e(idx.name)}<span class="cc">{idx.cc}</span></div>'
-                f'<div class="cp flat">—</div></div>')
+                f'<div class="cr"><span class="cp flat">ไม่มีข้อมูล</span></div></div>')
     p = q.change_pct
     cls = "up" if p > 0 else "down" if p < 0 else "flat"
     arrow = "▲" if p > 0 else "▼" if p < 0 else "▪"
@@ -336,7 +341,8 @@ def _chip(idx: Idx, quotes: dict) -> str:
           "rgba(246,70,93,.34)" if p < 0 else "rgba(139,149,172,.25)")
     return (f'<div class="chip" style="background:{tint};border-color:{bd}">'
             f'<div class="cn">{_e(idx.name)}<span class="cc">{idx.cc}</span></div>'
-            f'<div class="cp {cls}">{arrow} {p:+.2f}%</div></div>')
+            f'<div class="cr"><span class="cv">{fmt_num(q.close)}</span>'
+            f'<span class="cp {cls}">{arrow} {p:+.2f}%</span></div></div>')
 
 
 def build_html(quotes: dict, analysis: dict | None) -> str:
@@ -375,9 +381,6 @@ def build_html(quotes: dict, analysis: dict | None) -> str:
         story += (f'<div class="sblk"><div class="sh">'
                   f'<span class="sdot" style="background:{color}"></span>{title}</div>'
                   f'<ul class="why">{lis}</ul></div>')
-
-    # --- supporting table: every index, compact ---
-    tbl = "".join(_row_html(i, quotes) for _, _, its in REGIONS for i in its)
 
     # --- right rail ---
     stock_notes = {s.get("ticker", ""): s.get("note", "") for s in (a.get("stocks") or [])}
@@ -423,7 +426,7 @@ def build_html(quotes: dict, analysis: dict | None) -> str:
 
     return _TEMPLATE.format(
         date=date_str, headline=headline, sub=sub_html, tally=tally,
-        strip=strip, story=story, table=tbl,
+        strip=strip, story=story,
         rail=stk_block + sec_block + ex_block + ev_block + hl_block)
 
 
@@ -553,7 +556,10 @@ _TEMPLATE = """<!DOCTYPE html>
   .chip {{ display:flex; justify-content:space-between; align-items:center;
     border:1px solid; border-radius:9px; padding:8px 12px; }}
   .cn {{ font-size:18px; font-weight:600; color:#eef1f8; }}
-  .cp {{ font-size:17.5px; font-weight:700; font-variant-numeric:tabular-nums; }}
+  .cr {{ display:flex; align-items:baseline; gap:14px; }}
+  .cv {{ font-size:16.5px; color:#8b95ac; font-variant-numeric:tabular-nums; }}
+  .cp {{ font-size:17.5px; font-weight:700; font-variant-numeric:tabular-nums;
+    min-width:92px; text-align:right; }}
   /* body */
   .body {{ padding-top:24px; }}
   .rail {{ column-count:2; column-gap:18px; margin-top:10px; }}
@@ -586,7 +592,6 @@ _TEMPLATE = """<!DOCTYPE html>
   .pct {{ font-size:17.5px; font-weight:700; text-align:right;
     font-variant-numeric:tabular-nums; }}
   .up {{ color:#14b8a6; }} .down {{ color:#f6465d; }} .flat {{ color:#8b95ac; }}
-  .tbl {{ display:grid; grid-template-columns:repeat(2,1fr); gap:0 22px; }}
   /* right rail */
   .card {{ background:#0f1730; border:1px solid #212b47; border-radius:15px;
     padding:19px 22px; margin-bottom:18px; }}
@@ -627,8 +632,6 @@ _TEMPLATE = """<!DOCTYPE html>
     <div class="sectitle lg">อะไรทำให้ตลาดขึ้น–ลง</div>
     <div class="story">{story}</div>
     <div class="rail">{rail}</div>
-    <div class="sectitle" style="margin-top:22px">ดัชนีทั้งหมด</div>
-    <div class="tbl">{table}</div>
   </div>
 
   <div class="foot">
