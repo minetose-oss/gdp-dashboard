@@ -20,23 +20,96 @@ on:
 jobs:
   send-brief:
     runs-on: ubuntu-latest
-    # Needed by the keepalive step below, which pushes a timestamp commit.
+    # contents: write for the keepalive commit; actions: read so the guard
+    # below can see whether today's brief has already been sent.
     permissions:
       contents: write
+      actions: read
     steps:
+      # At most one brief per Bangkok day, and only in the morning.
+      #
+      # The trigger lives outside this repository, so a misconfigured external
+      # cron can fire this workflow far more often than intended — which is
+      # exactly what happened on 2026-11-02, when a schedule left on
+      # cron-job.org's "every 15 minutes" default would have sent roughly 45
+      # emails overnight. Nothing stopped it, because every trigger was trusted
+      # to mean "send the brief".
+      #
+      # So decide here rather than trusting the caller. A manual
+      # workflow_dispatch always sends, so testing and re-sending a failed
+      # morning stay possible. Any other trigger sends only inside the morning
+      # window and only if today's brief has not gone out yet.
+      #
+      # "Has gone out" is judged by the send step's own conclusion, not the
+      # run's: a run skipped by this guard still finishes green, so counting
+      # successful runs would make the first skip suppress every later run and
+      # the brief would silently stop for good.
+      #
+      # Skipped runs stop at this step, within a few seconds.
+      - name: Decide whether to send
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SEND_STEP: Build and send MARKET BRIEF
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run — sending."
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          hour=$(TZ=Asia/Bangkok date +%-H)
+          if [ "$hour" -lt 4 ] || [ "$hour" -gt 10 ]; then
+            echo "Bangkok time is ${hour}:xx — outside the 04:00-10:00 window. Skipping."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          start=$(date -u -d "$(TZ=Asia/Bangkok date +%F) 00:00:00 +07:00" +%Y-%m-%dT%H:%M:%SZ)
+          # If the check itself fails, send anyway: a duplicate email is a far
+          # smaller problem than a missed morning nobody notices.
+          if ! ids=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/daily-market-news.yml/runs?per_page=40" \
+                       --jq "[.workflow_runs[]
+                              | select(.created_at >= \"${start}\")
+                              | select(.id != ${GITHUB_RUN_ID})
+                              | .id] | .[]"); then
+            echo "Could not list today's runs — sending rather than risk a missed brief."
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for id in $ids; do
+            n=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs" \
+                  --jq "[.jobs[].steps[]?
+                         | select(.name == \"${SEND_STEP}\" and .conclusion == \"success\")] | length" \
+                || echo 0)
+            if [ "${n:-0}" -gt 0 ]; then
+              echo "Run ${id} already sent today's brief. Skipping."
+              echo "go=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          echo "No brief sent yet today — sending."
+          echo "go=true" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
+        if: steps.guard.outputs.go == 'true'
         with:
           python-version: "3.12"
 
       - name: Install dependencies
+        if: steps.guard.outputs.go == 'true'
         run: pip install -r scripts/requirements.txt
 
       - name: Install Chromium for rendering
+        if: steps.guard.outputs.go == 'true'
         run: python -m playwright install --with-deps chromium
 
       - name: Build and send MARKET BRIEF
+        if: steps.guard.outputs.go == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
@@ -70,7 +143,7 @@ jobs:
       # cannot loop. It is also best-effort: a failure here must never be
       # reported as a failure to send the brief.
       - name: Keep the schedule alive
-        if: ${{ always() && github.event.inputs.dry_run != 'true' }}
+        if: ${{ always() && steps.guard.outputs.go == 'true' && github.event.inputs.dry_run != 'true' }}
         continue-on-error: true
         run: |
           set -u
